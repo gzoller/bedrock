@@ -116,5 +116,5 @@ Copyright 2024
 Take a look at that wild query param spec for 'q' there. What is that? What is an example usage of that? Looks like two concepts got mangled together there.
 The hello endpoint didn't work here either.
 
-##Extra
+## Extra
 As an extra note, there are 3 lines separating each API call in the COMMANDS section. That's visually excessive. 1 empty line between each API is sufficient and cleaner.
