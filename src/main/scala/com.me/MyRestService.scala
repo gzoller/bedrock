@@ -22,6 +22,6 @@ object MyRestService:
   val booksRoute = endpoint.implementHandler(handler((query: String) => BookRepo.find(query)))
   val helloRoute = hello_endpoint.implementHandler(handler{(_:Unit) => "Hello!"})
 
-  val openAPI       = OpenAPIGen.fromEndpoints(title = "Library API", version = "1.0", endpoint)
+  val openAPI       = OpenAPIGen.fromEndpoints(title = "Library API", version = "1.0", endpoint, hello_endpoint)
   val swaggerRoutes = SwaggerUI.routes("docs" / "openapi", openAPI)
   val routes        = Routes(booksRoute, helloRoute) ++ swaggerRoutes
