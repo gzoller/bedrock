@@ -31,9 +31,16 @@ lazy val root = project
     },
     
     libraryDependencies ++= Seq(
-      "org.scalameta" %% "munit" % "1.0.0" % Test,
       "dev.zio" %% "zio" % "2.1.12",
       "dev.zio" %% "zio-http" % "3.0.1",
-      "dev.zio" %% "zio-http-cli" % "3.0.1" // If you want a runnable CLI
-    )
+      "dev.zio" %% "zio-http-cli" % "3.0.1", // If you want a runnable CLI
+      "com.github.jwt-scala" %% "jwt-core" % "10.0.1",
+      "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-core" % "2.20.3",
+      "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-macros" % "2.20.3" % "provided",
+      "org.scalameta" %% "munit" % "1.0.0" % Test,
+      "dev.zio" %% "zio-test" % "2.1.12" % Test,
+      "dev.zio" %% "zio-test-sbt" % "2.1.12" % Test,
+      "dev.zio" %% "zio-http-testkit" % "3.0.1" % Test
+    ),
+    testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework")
   )
