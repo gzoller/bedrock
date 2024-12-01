@@ -3,7 +3,6 @@ package com.me
 import zio.*
 import zio.http.*
 import zio.http.Header.{AccessControlAllowOrigin, AccessControlAllowMethods, AccessControlAllowHeaders}
-import zio.http.Middleware.{CorsConfig, cors} // to enable swagger "try it out" button
 
 class EmptyListException(message: String) extends Exception(message)
 
@@ -22,18 +21,11 @@ object Main extends ZIOAppDefault:
         }
     }
 
-  // This block restricting the "Try It Out" feature of Swagger, plus the mixin of "@@ Middleware.cors(corsConfig)" below
-  val corsConfig: CorsConfig = CorsConfig(
-    allowedOrigin = { case _ => Some(AccessControlAllowOrigin.All)}, // Allow all origins
-    allowedMethods = AccessControlAllowMethods(Method.GET, Method.POST, Method.OPTIONS), // Allow GET, POST, OPTIONS methods
-    allowedHeaders = AccessControlAllowHeaders("Content-Type", "Authorization") // Allow specific headers
-  )
-
   val program: ZIO[Config & Scope, EmptyListException, Unit] = for {
     count <- fn(List("Hello", "world", "from", "ZIO"))
     _ <- ZIO.succeed(println(s"Number of strings printed: $count"))
     shutdownPromise <- Promise.make[Nothing, Unit]
-    server <- Server.serve(MyRestService.routes @@ Middleware.cors(corsConfig)).provide(Server.default).fork
+    server <- Server.serve(MyRestService.routes).provide(Server.default).fork
     _ <- shutdownPromise.await.onInterrupt(server.interrupt)
   } yield ()
 

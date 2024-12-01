@@ -1,4 +1,5 @@
 import sbtassembly.AssemblyPlugin.autoImport._
+enablePlugins(BuildInfoPlugin)
 
 val scala3Version = "3.5.2"
 
@@ -11,6 +12,12 @@ lazy val root = project
     scalaVersion := scala3Version,
 
     Compile / mainClass := Some("com.me.Main"),
+
+    buildInfoKeys := Seq("isProd" -> sys.props.getOrElse("prod","false").toBoolean),
+    buildInfoPackage := "com.me",
+    buildInfoObject := "MyBuildInfo",
+    // Global / excludeLintKeys += buildInfoKeys, // Suppress annoying lint message about unused keys
+    // Global / excludeLintKeys += buildInfoPackage, 
 
     // TODO: Use a better assembler-packager like sbt-native-packager
     assembly / assemblyMergeStrategy := {
