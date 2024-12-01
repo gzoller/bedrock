@@ -21,11 +21,13 @@ object Main extends ZIOAppDefault:
         }
     }
 
-  val program: ZIO[Config & Scope, EmptyListException, Unit] = for {
+  val program: ZIO[Config & Scope & BookRepo, EmptyListException, Unit] = for {
     count <- fn(List("Hello", "world", "from", "ZIO"))
     _ <- ZIO.succeed(println(s"Number of strings printed: $count"))
     shutdownPromise <- Promise.make[Nothing, Unit]
-    server <- Server.serve(MyRestService.routes).provide(Server.default).fork
+    bookRepo <- ZIO.service[BookRepo]
+    bookService = BookService(bookRepo)
+    server <- Server.serve(bookService.routes).provide(Server.default).fork
     _ <- shutdownPromise.await.onInterrupt(server.interrupt)
   } yield ()
 
@@ -33,5 +35,10 @@ object Main extends ZIOAppDefault:
 
   override def run: ZIO[Any & ZIOAppArgs & Scope, Any, Any] = {
     val config = configs(scala.util.Random.nextInt(configs.length))
-    program.provideSomeLayer[Scope](ZLayer.succeed(config)).exitCode
+    program
+      .provideSomeLayer[Scope](
+        ZLayer.succeed(BookRepoStd) ++ 
+        ZLayer.succeed(config)
+        )
+      .exitCode
   }
