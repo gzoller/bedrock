@@ -35,3 +35,6 @@ classes/
 
 # Visual Studio Code
 .vscode
+
+# localstack
+localstack-data

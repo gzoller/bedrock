@@ -1,0 +1,71 @@
+Is there an event store, like kafka, that allows you to query over the events as well as pub/sub?
+
+Yes, there are event stores that combine event streaming (like Kafka’s publish/subscribe model) with querying capabilities over the stored events. These systems are designed to handle both the pub/sub patterns for real-time processing and querying over historical data. Here are some notable options:
+
+1. Apache Pulsar
+	•	Features:
+	•	Like Kafka, Pulsar is a distributed messaging and event-streaming platform.
+	•	It supports pub/sub and message retention for querying historical events.
+	•	Pulsar includes Pulsar SQL, which allows you to run SQL queries over the retained messages/events.
+	•	Best For:
+	•	Real-time event streaming with query capabilities.
+	•	Scenarios where tiered storage (hot and cold) and multi-tenancy are important.
+
+2. EventStoreDB
+	•	Features:
+	•	Purpose-built for event sourcing and storing events.
+	•	Offers a query language (EventStoreDB query language) to inspect and query streams of events.
+	•	Supports subscriptions for real-time pub/sub capabilities.
+	•	Best For:
+	•	Event-sourcing architectures where querying historical data is essential.
+	•	Aggregating events over time or replaying events to rebuild system state.
+
+3. Redpanda
+	•	Features:
+	•	A Kafka-compatible streaming platform that simplifies infrastructure while offering high performance.
+	•	Supports real-time pub/sub.
+	•	Works seamlessly with SQL engines like ksqlDB (Kafka SQL) for querying events.
+	•	Best For:
+	•	Teams familiar with Kafka who want a simpler or more efficient solution.
+	•	Real-time analytics and event-based querying.
+
+4. ksqlDB (with Kafka)
+	•	Features:
+	•	A streaming database built for Kafka.
+	•	Lets you query Kafka topics in real time using SQL.
+	•	Works directly on Kafka topics to provide stateful processing and querying over events.
+	•	Best For:
+	•	Use cases where Kafka is already part of the architecture.
+	•	Combining event streaming with real-time analytics.
+
+5. Materialize
+	•	Features:
+	•	A real-time streaming database designed for event streams.
+	•	Integrates seamlessly with Kafka to provide SQL querying over Kafka topics.
+	•	Maintains materialized views, which are updated in real time as new events are streamed in.
+	•	Best For:
+	•	Low-latency querying and real-time analytics on Kafka streams.
+	•	Use cases requiring SQL-based interaction with event data.
+
+6. Pravega
+	•	Features:
+	•	A distributed storage and streaming system for unbounded and bounded data.
+	•	Integrates with tools like Flink for querying and processing data streams.
+	•	Supports pub/sub and querying via processing frameworks.
+	•	Best For:
+	•	Long-term storage and querying of event streams.
+	•	Scenarios involving scalable streaming storage.
+
+7. Flink with Kafka
+	•	Features:
+	•	Apache Flink provides powerful stream processing and querying capabilities.
+	•	Works natively with Kafka for querying and processing streams in real time.
+	•	Best For:
+	•	Advanced real-time stream processing with querying capabilities.
+	•	Complex event-driven applications.
+
+How They Compare to Kafka Alone
+	•	Kafka is great for event streaming, but querying over events requires external tools like ksqlDB or Materialize.
+	•	Event stores like EventStoreDB or Pulsar offer integrated querying and storage capabilities tailored for event-driven architectures.
+
+Let me know your specific use case, and I can help recommend the best tool for your scenario!

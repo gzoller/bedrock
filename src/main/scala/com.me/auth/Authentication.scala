@@ -1,4 +1,5 @@
 package com.me
+package auth
 
 import java.time.Clock
 import scala.util.Try
@@ -17,6 +18,7 @@ object Authentication:
 
   // Secret Authentication key. In real life this would be a secret in Github or similar
   val SECRET_KEY = "secretKey"
+  // val SECRET_KEY = SecretKeyManager.getSecretKey()
   val USER_ID = "bogus_user" // In real life this would be obtained on a login web form or similar
 
   def jwtEncode(username: String, key: String): String =

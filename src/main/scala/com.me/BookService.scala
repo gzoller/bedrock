@@ -6,8 +6,10 @@ import zio.http.codec.*
 import zio.http.codec.PathCodec.*
 import zio.http.endpoint.{AuthType,Endpoint}
 import zio.http.endpoint.openapi.*
-import zio.http.endpoint.openapi.OpenAPI.SecurityScheme
-import Authentication.*
+import zio.http.endpoint.openapi.OpenAPI.{Components,Key,ReferenceOr,SecurityScheme}
+import zio.http.endpoint.openapi.OpenAPI.SecurityScheme.*
+import auth.Authentication.*
+import scala.collection.immutable.ListMap
 
 case class BookService( bookRepo: BookRepo ):
 
@@ -23,18 +25,21 @@ case class BookService( bookRepo: BookRepo ):
     .query(HttpCodec.query[String]("q").examples (("example1", "scala"), ("example2", "zio")) ?? Doc.p(
           "Query parameter for searching books"
         ))
+    .query(HttpCodec.query[Int]("num").examples (("example1", 1), ("example2", 2)) ?? Doc.p(
+          "Bogus second parameter--does nothing"
+        ))
+    // .in[Book] << Example showing inclusion of a request body (json), which would be passed to handler with query params
     .out[List[Book]](Doc.p("List of books matching the query")) 
-    .auth[AuthType.Bearer](AuthType.Bearer)
+    .auth(AuthType.Bearer)
     ?? Doc.p(
       "Endpoint to query books based on a search query"
     )
-  val book_handler: Handler[String, Nothing, String, List[Book]] = handler { (query: String) =>
+  val book_handler: Handler[String, Nothing, (String,Int), List[Book]] = handler { (query: String, num: Int) =>
     withContext((user: String) => bookRepo.find(query) )
   }
   val booksRoute = Routes(book_endpoint.implementHandler(book_handler)) @@ bearerAuthWithContext
 
   // --------- Hello message
-  // val helloRoute = hello_endpoint.implementHandler(handler((_:Unit) => ZIO.succeed("Hello, World!")))
   val hello_endpoint = Endpoint(RoutePattern.GET / "hello" ?? (Doc.p("Say hello to the people") + authHeaderDoc))
     .out[String](MediaType.text.plain, Doc.p("Just a hello message")) // force plaintext response, not JSON
     .auth[AuthType.Bearer](AuthType.Bearer)
@@ -46,22 +51,34 @@ case class BookService( bookRepo: BookRepo ):
   // --------- Login message
   val login_endpoint = Endpoint((RoutePattern.GET / "login") ?? Doc.p("Mock of a user login form to obtain auth token"))
     .out[String](MediaType.text.plain, Doc.p("Got me a token!")) // force plaintext response, not JSON
-  val loginRoute = login_endpoint.implementHandler(handler{(_:Unit) => ZIO.succeed(jwtEncode(USER_ID, SECRET_KEY))})
-    //FOO: Success(JwtClaim({"sub":"bogus_user"}, None, None, None, Some(1733862597), None, Some(1733862297), None))
-  
+  val loginRoute = login_endpoint.implementHandler(handler{(_:Unit) => ZIO.succeed(jwtEncode(USER_ID, SECRET_KEY))})  
 
   // --------- Swagger, if non-prod
-  /* 
-val swaggerRoute = SwaggerUI
-  .fromEndpoints(List(hello_endpoint), "Hello API", "1.0.0")
-  .withSecurityScheme("BearerAuth", bearerAuthScheme)            // Register the BearerAuth scheme
-  .withSecurityRequirement("BearerAuth", hello_endpoint) 
-   */
   val swaggerRoutes = 
     if com.me.MyBuildInfo.isProd then
       Routes.empty // disable Swagger for prod deployment
     else
-      // val openAPI = OpenAPIGen.fromEndpoints(title = "Library API", version = "1.0", book_endpoint, hello_endpoint, login_endpoint)
+      val openAPIFirst = OpenAPIGen.fromEndpoints(title = "Library API", version = "1.0", book_endpoint, hello_endpoint, login_endpoint)
+      val openAPI = openAPIFirst
+          .copy(
+            components = Some(Components(
+              securitySchemes = ListMap(Key.fromString("BearerAuth").get -> ReferenceOr.Or(bearerAuthScheme)),
+              schemas = openAPIFirst.components.get.schemas
+              ))
+          )
+      SwaggerUI.routes("docs" / "openapi", openAPI)
+
+  // --------- Bundle up all routes
+  val routes        = Routes(loginRoute) ++ booksRoute ++ helloRoute ++ swaggerRoutes
+
+
+
+/* 
+NOTE: As of this writing, ZIO HTTP does not yet support the latest OpenAPI and more specifically will not
+correctly generate the "security" block of JSON needed for HTTPS.  The JSON below is a working sample.
+I've modified a build of ZIO HTTPS with a fix and issued a PR into the main project, if the maintainers choose
+to accept it. Otherwise JSON will need to be manually generated/manipulated to add the security block.
+
       val openAPIRaw = OpenAPI.fromJson("""
 {
   "openapi" : "3.1.0",
@@ -220,9 +237,5 @@ val swaggerRoute = SwaggerUI
     }
   }
 }      """)
-      val openAPI = openAPIRaw.getOrElse(null)
-      println(openAPI.toJsonPretty)
-      SwaggerUI.routes("docs" / "openapi", openAPI)
-
-  // --------- Bundle up all routes
-  val routes        = Routes(loginRoute) ++ booksRoute ++ helloRoute ++ swaggerRoutes
+val openAPI = openAPIRaw.getOrElse(null)
+       */
