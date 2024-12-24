@@ -1,0 +1,17 @@
+version: "3.8"
+
+services:
+  localstack:
+    image: localstack/localstack:latest
+    container_name: localstack
+    ports:
+      - "4566:4566"  # LocalStack Gateway (default)
+      - "4510-4559:4510-4559"  # Additional service-specific ports (optional)
+    environment:
+      - SERVICES=secretsmanager  # Specify which AWS services to mock
+      - DEBUG=1  # Enable debugging output (optional)
+      - DATA_DIR=/tmp/localstack/data  # Persistent storage for LocalStack state (optional)
+      - LAMBDA_EXECUTOR=docker  # Required for Lambda testing (if applicable)
+    volumes:
+      - "./localstack-data:/tmp/localstack"  # Mount local directory for persistence
+      - "/var/run/docker.sock:/var/run/docker.sock"  # Required for Lambda execution

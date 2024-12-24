@@ -3,6 +3,11 @@ package com.me
 import zio.*
 import zio.Console.*
 import zio.http.*
+import auth.SecretKeyManager
+import aws.AwsEnvironment
+
+import zio.http.netty.*
+import zio.http.netty.client.NettyClientDriver
 
 class EmptyListException(message: String) extends Exception(message)
 
@@ -21,15 +26,29 @@ object Main extends ZIOAppDefault:
 
     }
 
-  val program: ZIO[Config & Scope & BookRepo, EmptyListException, Unit] = 
+  val program: ZIO[Scope & Client & Config & BookRepo, EmptyListException, Unit] = 
     // Set up SSL certs, config, and port for use when we start the server.
-    val sslConfig = SSLConfig.fromResource("server.crt", "server.key")
+    val sslConfig = SSLConfig.fromResource(
+      behaviour = SSLConfig.HttpBehaviour.Fail, // Restrict everything to HTTPS--appropriate for entrprise server
+      certPath = "server.crt", 
+      keyPath = "server.key"
+      )
     val serverConfig = (config: Server.Config) => config.port(8073).ssl(sslConfig)
     val serverLayer = Server.defaultWith(serverConfig)
     for {
       count <- fn(List("Hello", "world", "from", "ZIO"))
       _ <- ZIO.succeed(println(s"Number of strings printed: $count"))
 
+      // Ping AWS to see if we're actually running on AWS. If no response, assume running locally
+      awsRegion   <- AwsEnvironment.getAwsRegion.mapError {
+        case _: Throwable => new EmptyListException("AWS Region retrieval failed")
+      }
+      _        <- ZIO.logInfo(s"Region: ${awsRegion.getOrElse("Unknown")}")      
+
+      secretKey <- SecretKeyManager.getSecretKey(awsRegion).tapError(e => ZIO.logError(s"Failed to retrieve secret: ${e.getMessage}"))
+            .orElse(ZIO.succeed("foo"))
+      _ <- ZIO.succeed(println(s"Secret key: $secretKey"))
+      
       // Get the injected BookRepo dependency
       bookRepo <- ZIO.service[BookRepo]
       bookService = BookService(bookRepo)
@@ -41,12 +60,24 @@ object Main extends ZIOAppDefault:
 
   val configs = List(Config(prefix = "Prefix:"), Config(prefix = "Blah:"))
 
-  override def run: ZIO[Any & ZIOAppArgs & Scope, Any, Any] = {
+  private val partialClientLayer = ZLayer.makeSome[ZClient.Config, Client](
+    Client.customized,
+    NettyClientDriver.live,
+    DnsResolver.default,
+    ZLayer.succeed(NettyConfig.defaultWithFastShutdown),
+  )
+
+  override def run: ZIO[Any & ZIOAppArgs, Any, Any] = {
     val config = configs(scala.util.Random.nextInt(configs.length))
-    program
-      .provideSomeLayer[Scope](
-        ZLayer.succeed(BookRepoStd) ++ 
-        ZLayer.succeed(config)
-        )
-      .exitCode
+
+    ZIO.scoped {
+      program
+        .provideSomeLayer(
+          ZLayer.succeed(ZClient.Config.default.connectionTimeout(5.second)) >>>
+          partialClientLayer ++
+
+          ZLayer.succeed(BookRepoStd) ++ 
+          ZLayer.succeed(config)
+          )
+    }.exitCode
   }
