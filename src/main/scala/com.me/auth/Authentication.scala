@@ -16,11 +16,6 @@ object Authentication:
   case class JwtPayload(sub: Option[String])
   implicit val payloadCodec: JsonValueCodec[JwtPayload] = JsonCodecMaker.make
 
-  // Secret Authentication key. In real life this would be a secret in Github or similar
-  val SECRET_KEY = "secretKey"
-  // val SECRET_KEY = SecretKeyManager.getSecretKey()
-  val USER_ID = "bogus_user" // In real life this would be obtained on a login web form or similar
-
   def jwtEncode(username: String, key: String): String =
     Jwt.encode(JwtClaim(subject = Some(username)).issuedNow.expiresIn(300), key, JwtAlgorithm.HS512)
 
@@ -39,12 +34,12 @@ object Authentication:
     }
   }
 
-  val bearerAuthWithContext: HandlerAspect[Any, String] =
+  def bearerAuthWithContext(secret: String): HandlerAspect[Any, String] =
     HandlerAspect.interceptIncomingHandler(Handler.fromFunctionZIO[Request] { request =>
       request.header(Header.Authorization) match {
         case Some(Header.Authorization.Bearer(token)) =>
           ZIO
-            .fromTry(jwtDecode(token.value.asString, SECRET_KEY))
+            .fromTry(jwtDecode(token.value.asString, secret))
             .orElseFail(Response.badRequest("Invalid or expired token!"))
             .flatMap(claim => ZIO.fromOption(extractSubjectFromPayload(claim)).orElseFail(Response.badRequest("Missing subject claim!")))
             .map(u => (request, u))

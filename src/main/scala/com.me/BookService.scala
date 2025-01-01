@@ -11,7 +11,7 @@ import zio.http.endpoint.openapi.OpenAPI.SecurityScheme.*
 import auth.Authentication.*
 import scala.collection.immutable.ListMap
 
-case class BookService( bookRepo: BookRepo ):
+case class BookService( bookRepo: BookRepo, secret: String ):
 
   val authHeaderDoc = Doc.p("Requires an `Authorization: Bearer <token>` header to access this endpoint.")
   val bearerAuthScheme = OpenAPI.SecurityScheme.Http(
@@ -37,8 +37,8 @@ case class BookService( bookRepo: BookRepo ):
   val book_handler: Handler[String, Nothing, (String,Int), List[Book]] = handler { (query: String, num: Int) =>
     withContext((user: String) => bookRepo.find(query) )
   }
-  val booksRoute = Routes(book_endpoint.implementHandler(book_handler)) @@ bearerAuthWithContext
-
+  val booksRoute = Routes(book_endpoint.implementHandler(book_handler)) @@ bearerAuthWithContext(secret)
+  
   // --------- Hello message
   val hello_endpoint = Endpoint(RoutePattern.GET / "hello" ?? (Doc.p("Say hello to the people") + authHeaderDoc))
     .out[String](MediaType.text.plain, Doc.p("Just a hello message")) // force plaintext response, not JSON
@@ -46,12 +46,15 @@ case class BookService( bookRepo: BookRepo ):
   val hello_handler: Handler[String, Nothing, Unit, String] = handler { (_: Unit) =>
     withContext((user: String) => s"Hello, World, $user!")
   }
-  val helloRoute = Routes(hello_endpoint.implementHandler(hello_handler)) @@ bearerAuthWithContext
+  val helloRoute = Routes(hello_endpoint.implementHandler(hello_handler)) @@ bearerAuthWithContext(secret)
 
   // --------- Login message
   val login_endpoint = Endpoint((RoutePattern.GET / "login") ?? Doc.p("Mock of a user login form to obtain auth token"))
     .out[String](MediaType.text.plain, Doc.p("Got me a token!")) // force plaintext response, not JSON
-  val loginRoute = login_endpoint.implementHandler(handler{(_:Unit) => ZIO.succeed(jwtEncode(USER_ID, SECRET_KEY))})  
+  // In real life user id and password would be submitted via a web form (POST). The user/pwd looked up in some table,
+  // and finally the userId + secret would be used to encode a token. Possibly we might want to encode a session id
+  // instead of userId, if a session context is desirable.
+  val loginRoute = login_endpoint.implementHandler(handler{(_:Unit) => ZIO.succeed(jwtEncode("bogus_user", secret))})  
 
   // --------- Swagger, if non-prod
   val swaggerRoutes = 

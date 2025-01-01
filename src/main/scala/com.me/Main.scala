@@ -3,7 +3,7 @@ package com.me
 import zio.*
 import zio.Console.*
 import zio.http.*
-import auth.SecretKeyManager
+import auth.{Key, SecretKeyManager}
 import aws.AwsEnvironment
 
 import zio.http.netty.*
@@ -43,15 +43,15 @@ object Main extends ZIOAppDefault:
       awsRegion   <- AwsEnvironment.getAwsRegion.mapError {
         case _: Throwable => new EmptyListException("AWS Region retrieval failed")
       }
-      _        <- ZIO.logInfo(s"Region: ${awsRegion.getOrElse("Unknown")}")      
+      _        <- ZIO.logInfo(s"Region: ${awsRegion.getOrElse("Unknown")}")
 
-      secretKey <- SecretKeyManager.getSecretKey(awsRegion).tapError(e => ZIO.logError(s"Failed to retrieve secret: ${e.getMessage}"))
-            .orElse(ZIO.succeed("foo"))
-      _ <- ZIO.succeed(println(s"Secret key: $secretKey"))
+      secretKeys <- SecretKeyManager(awsRegion).getSecretKey.tapError(e => ZIO.logError(s"Failed to retrieve secret: ${e.getMessage}"))
+            .orElse(ZIO.succeed((Key("none","foo"),None)))
+      _ <- ZIO.succeed(println(s"Secret keys: $secretKeys"))
       
       // Get the injected BookRepo dependency
       bookRepo <- ZIO.service[BookRepo]
-      bookService = BookService(bookRepo)
+      bookService = BookService(bookRepo, secretKeys._1.value)
 
       shutdownPromise <- Promise.make[Nothing, Unit]
       server <- Server.serve(bookService.routes).provide(serverLayer).fork
@@ -60,7 +60,8 @@ object Main extends ZIOAppDefault:
 
   val configs = List(Config(prefix = "Prefix:"), Config(prefix = "Blah:"))
 
-  private val partialClientLayer = ZLayer.makeSome[ZClient.Config, Client](
+  private val clientLayer = ZLayer.make[Client](
+    ZLayer.succeed(ZClient.Config.default.connectionTimeout(5.seconds)),
     Client.customized,
     NettyClientDriver.live,
     DnsResolver.default,
@@ -73,9 +74,7 @@ object Main extends ZIOAppDefault:
     ZIO.scoped {
       program
         .provideSomeLayer(
-          ZLayer.succeed(ZClient.Config.default.connectionTimeout(5.second)) >>>
-          partialClientLayer ++
-
+          clientLayer ++
           ZLayer.succeed(BookRepoStd) ++ 
           ZLayer.succeed(config)
           )
