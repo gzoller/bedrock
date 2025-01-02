@@ -1,13 +1,19 @@
 package com.me
+package services
 package aws
 
 import zio.*
 import zio.http.*
 import software.amazon.awssdk.regions.Region
 
-object AwsEnvironment {
+trait AwsEnvironment:
+  def getRegion: ZIO[ZClient[Any, Scope, Body, Throwable, Response], Throwable, Option[Region]]
 
-  lazy val getAwsRegion = {
+
+// This is the live/real implementation. Could produce a mock implementation to inject for testing
+final case class LiveAwsEnvironment() extends AwsEnvironment:
+
+  def getRegion: ZIO[ZClient[Any, Scope, Body, Throwable, Response], Throwable, Option[Region]] =
     val metadataUrl = URL.decode("http://169.254.169.254/latest/meta-data/placement/region").toOption.get
     val request = Request.get(metadataUrl)
 
@@ -21,7 +27,10 @@ object AwsEnvironment {
         case _ =>
           ZIO.succeed(None) // Return None for non-successful responses or timeouts
       }
-    } yield result
-  }
+    } yield (result)
 
-}
+
+object AwsEnvironment:
+  // Creates a live instance for dependency injection in main program
+  val live: ULayer[AwsEnvironment] =
+    ZLayer.succeed(LiveAwsEnvironment())

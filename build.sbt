@@ -29,6 +29,11 @@ lazy val root = project
           oldStrategy(x)
       }
     },
+
+    ThisBuild / scalacOptions ++= Seq(
+      "-Wunused:imports", // Warn on unused imports
+      "-explain-cyclic"
+    ),
     
     libraryDependencies ++= Seq(
       "dev.zio" %% "zio" % "2.1.12",
