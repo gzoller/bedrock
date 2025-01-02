@@ -1,4 +1,10 @@
 package com.me
+package services
+package endpoint
+
+import auth.Authentication
+import auth.Authentication.*
+import db.BookRepo
 
 import zio.*
 import zio.http.*
@@ -8,10 +14,14 @@ import zio.http.endpoint.{AuthType,Endpoint}
 import zio.http.endpoint.openapi.*
 import zio.http.endpoint.openapi.OpenAPI.{Components,Key,ReferenceOr,SecurityScheme}
 import zio.http.endpoint.openapi.OpenAPI.SecurityScheme.*
-import auth.Authentication.*
 import scala.collection.immutable.ListMap
+import zio.http.Status.InternalServerError
 
-case class BookService( bookRepo: BookRepo, secret: String ):
+trait BookEndpoint:
+  def routes: ZIO[Any, Nothing, Routes[Any, Response]]
+
+
+final case class LiveBookEndpoint( auth: Authentication, bookRepo: BookRepo ) extends BookEndpoint:
 
   val authHeaderDoc = Doc.p("Requires an `Authorization: Bearer <token>` header to access this endpoint.")
   val bearerAuthScheme = OpenAPI.SecurityScheme.Http(
@@ -21,6 +31,7 @@ case class BookService( bookRepo: BookRepo, secret: String ):
   )
 
   // --------- Search for books 
+  //===============================================================
   val book_endpoint = Endpoint((RoutePattern.GET / "books") ?? (Doc.p("Route for querying books" + authHeaderDoc)))
     .query(HttpCodec.query[String]("q").examples (("example1", "scala"), ("example2", "zio")) ?? Doc.p(
           "Query parameter for searching books"
@@ -34,28 +45,61 @@ case class BookService( bookRepo: BookRepo, secret: String ):
     ?? Doc.p(
       "Endpoint to query books based on a search query"
     )
+
+  // The String here in the Handler R type is the user id, pulled from the decrypted token, ie. the "subject".
+  // In a production server this could be a more complex session object, or a session id, etc.
   val book_handler: Handler[String, Nothing, (String,Int), List[Book]] = handler { (query: String, num: Int) =>
     withContext((user: String) => bookRepo.find(query) )
   }
-  val booksRoute = Routes(book_endpoint.implementHandler(book_handler)) @@ bearerAuthWithContext(secret)
-  
+  val bookSearchRoute = Routes(book_endpoint.implementHandler(book_handler))
+
+
   // --------- Hello message
+  //===============================================================
   val hello_endpoint = Endpoint(RoutePattern.GET / "hello" ?? (Doc.p("Say hello to the people") + authHeaderDoc))
     .out[String](MediaType.text.plain, Doc.p("Just a hello message")) // force plaintext response, not JSON
     .auth[AuthType.Bearer](AuthType.Bearer)
   val hello_handler: Handler[String, Nothing, Unit, String] = handler { (_: Unit) =>
     withContext((user: String) => s"Hello, World, $user!")
   }
-  val helloRoute = Routes(hello_endpoint.implementHandler(hello_handler)) @@ bearerAuthWithContext(secret)
+  val helloRoute = Routes(hello_endpoint.implementHandler(hello_handler))
+
 
   // --------- Login message
+  //===============================================================
   val login_endpoint = Endpoint((RoutePattern.GET / "login") ?? Doc.p("Mock of a user login form to obtain auth token"))
-    .out[String](MediaType.text.plain, Doc.p("Got me a token!")) // force plaintext response, not JSON
+      .out[String](MediaType.text.plain, Doc.p("Got me a token!")) // force plaintext response, not JSON
+
   // In real life user id and password would be submitted via a web form (POST). The user/pwd looked up in some table,
   // and finally the userId + secret would be used to encode a token. Possibly we might want to encode a session id
   // instead of userId, if a session context is desirable.
-  val loginRoute = login_endpoint.implementHandler(handler{(_:Unit) => ZIO.succeed(jwtEncode("bogus_user", secret))})  
+  /*
+  val login_handler: Handler[Authentication, Nothing, Unit, Response] = 
+    Handler.fromFunctionZIO { (_: Unit) =>
+      ZIO.serviceWithZIO[Authentication] { auth =>
+        auth
+          .login("bogus_user", "pwd") // Attempt to login
+          .map(token => Response.text(s"Login successful: $token")) // Map success to a Response
+          .catchAll { err => // Handle errors
+            ZIO.logError(s"Login failed: ${err.getMessage}") *>
+            ZIO.succeed(Response.error(InternalServerError, err.getMessage))
+          }
+      }
+    }
+      */
+  val login_handler: Handler[Any, Nothing, Unit, String] =
+    Handler.fromFunctionZIO { (_: Unit) =>
+      auth
+        .login("bogus_user", "pwd")
+        .map(token => s"Status: 200, Body: Login successful: $token")
+        .catchAll { err =>
+          ZIO.logError(s"Login failed: ${err.getMessage}") *>
+          ZIO.succeed(s"Status: 401, Body: Invalid login: ${err.getMessage}")
+        }
+    }
 
+  val loginRoute = Routes(login_endpoint.implementHandler(login_handler))
+  
   // --------- Swagger, if non-prod
   val swaggerRoutes = 
     if com.me.MyBuildInfo.isProd then
@@ -71,10 +115,24 @@ case class BookService( bookRepo: BookRepo, secret: String ):
           )
       SwaggerUI.routes("docs" / "openapi", openAPI)
 
+// TODO: Make this BookEndpoint a service, inject BookRepo on creation, then the normal bearerAuthWithContext should work
+// because Handler can just be String, not String & BookRepo
+
   // --------- Bundle up all routes
-  val routes        = Routes(loginRoute) ++ booksRoute ++ helloRoute ++ swaggerRoutes
+  def routes: ZIO[Any, Nothing, Routes[Any, Response]] =
+    // Get Authentication from environment--it was provided in Main to the program
+    val combined: Routes[Any, zio.http.Response] = loginRoute ++ (bookSearchRoute ++ helloRoute) @@ auth.bearerAuthWithContext ++ swaggerRoutes
+    ZIO.succeed(combined)
 
 
+object BookEndpoint:
+  def live: ZLayer[Authentication & BookRepo, Nothing, BookEndpoint] =
+    ZLayer.fromZIO {
+      for {
+        auth <- ZIO.service[Authentication]
+        bookRepo <- ZIO.service[BookRepo]
+      } yield LiveBookEndpoint(auth, bookRepo)
+    }
 
 /* 
 NOTE: As of this writing, ZIO HTTP does not yet support the latest OpenAPI and more specifically will not

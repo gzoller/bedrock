@@ -1,64 +1,81 @@
 package com.me
 
+import services.* 
+import auth.{Authentication, SecretKeyManager}
+import db.BookRepo
+
 import zio.*
 import zio.Console.*
 import zio.http.*
-import auth.{Key, SecretKeyManager}
+
 import aws.AwsEnvironment
+import services.endpoint.BookEndpoint
 
 import zio.http.netty.*
 import zio.http.netty.client.NettyClientDriver
 
-class EmptyListException(message: String) extends Exception(message)
+object Main extends ZIOAppDefault {
 
-case class Config(prefix: String)
+  val sslConfig = SSLConfig.fromResource(
+    behaviour = SSLConfig.HttpBehaviour.Fail,
+    certPath = "server.crt",
+    keyPath = "server.key"
+  )
+  val serverConfig = (config: Server.Config) => config.port(8073).ssl(sslConfig)
+  val serverLayer = Server.defaultWith(serverConfig)
 
-object Main extends ZIOAppDefault:
+  val clientLayer = ZLayer.make[Client](
+    ZLayer.succeed(ZClient.Config.default.connectionTimeout(5.seconds)),
+    Client.customized,
+    NettyClientDriver.live,
+    DnsResolver.default,
+    ZLayer.succeed(NettyConfig.defaultWithFastShutdown)
+  )
 
-  def fn(strings: List[String]): ZIO[Config, EmptyListException, Int] = 
-    ZIO.serviceWithZIO[Config] { config =>
-      if (strings.isEmpty) 
-        ZIO.fail(new EmptyListException("List is empty"))
-      else 
-        ZIO.foreach(strings)(str => printLine(s"${config.prefix} $str")) // print using ZIO.Console
-          .mapError(_ => new EmptyListException("IO Error")) // Console may toss an IO Exception so need to map that to an EmptyListExcpetion, which is what is expected
-          .as(strings.length) // resulting Int
-
+  // val program: ZIO[Client & Server & AwsEnvironment & SecretKeyManager & Authentication & BookRepo & BookEndpoint, Throwable, Unit] =
+  val program: ZIO[Server & BookEndpoint, Throwable, Unit] =
+    ZIO.scoped {
+      for {
+        bookEndpoint <- ZIO.service[BookEndpoint]
+        routes        <- bookEndpoint.routes
+        shutdownPromise <- Promise.make[Nothing, Unit]
+        server <- Server.serve(routes).provideLayer(serverLayer).fork
+        _ <- shutdownPromise.await.onInterrupt(server.interrupt)
+      } yield ()
     }
 
-  val program: ZIO[Scope & Client & Config & BookRepo, EmptyListException, Unit] = 
-    // Set up SSL certs, config, and port for use when we start the server.
-    val sslConfig = SSLConfig.fromResource(
-      behaviour = SSLConfig.HttpBehaviour.Fail, // Restrict everything to HTTPS--appropriate for entrprise server
-      certPath = "server.crt", 
-      keyPath = "server.key"
-      )
-    val serverConfig = (config: Server.Config) => config.port(8073).ssl(sslConfig)
-    val serverLayer = Server.defaultWith(serverConfig)
-    for {
-      count <- fn(List("Hello", "world", "from", "ZIO"))
-      _ <- ZIO.succeed(println(s"Number of strings printed: $count"))
+  override def run: URIO[Any, ExitCode] = {
+    // Bunch of composition here to help untangle dependencies...
+    //
+    val secretKeyManagerLayer: ZLayer[Any, Throwable, SecretKeyManager] =
+      AwsEnvironment.live ++ clientLayer >>> SecretKeyManager.live      
 
-      // Ping AWS to see if we're actually running on AWS. If no response, assume running locally
-      awsRegion   <- AwsEnvironment.getAwsRegion.mapError {
-        case _: Throwable => new EmptyListException("AWS Region retrieval failed")
-      }
-      _        <- ZIO.logInfo(s"Region: ${awsRegion.getOrElse("Unknown")}")
+    val authenticationLayer: ZLayer[Any, Throwable, Authentication] =
+      secretKeyManagerLayer >>> Authentication.live
 
-      secretKeys <- SecretKeyManager(awsRegion).getSecretKey.tapError(e => ZIO.logError(s"Failed to retrieve secret: ${e.getMessage}"))
-            .orElse(ZIO.succeed((Key("none","foo"),None)))
-      _ <- ZIO.succeed(println(s"Secret keys: $secretKeys"))
-      
-      // Get the injected BookRepo dependency
-      bookRepo <- ZIO.service[BookRepo]
-      bookService = BookService(bookRepo, secretKeys._1.value)
+    val bookEndpointLayer: ZLayer[Any, Throwable, BookEndpoint] =
+      authenticationLayer ++ BookRepo.mock >>> BookEndpoint.live
 
-      shutdownPromise <- Promise.make[Nothing, Unit]
-      server <- Server.serve(bookService.routes).provide(serverLayer).fork
-      _ <- shutdownPromise.await.onInterrupt(server.interrupt)
-    } yield ()
+    program.provide(
+      serverLayer ++                     // Provide server
+      clientLayer ++                     // Provide ZClient
+      secretKeyManagerLayer ++           // Provide SecretKeyManager
+      authenticationLayer ++             // Provide Authentication
+      bookEndpointLayer                  // Provide BookEndpoint
+    ).exitCode      
+  }
+}
 
-  val configs = List(Config(prefix = "Prefix:"), Config(prefix = "Blah:"))
+/*
+object Main extends ZIOAppDefault:
+
+  private val sslConfig = SSLConfig.fromResource(
+    behaviour = SSLConfig.HttpBehaviour.Fail, // Restrict everything to HTTPS--appropriate for enterprise server
+    certPath = "server.crt", 
+    keyPath = "server.key"
+  )
+  private val serverConfig = (config: Server.Config) => config.port(8073).ssl(sslConfig)
+  private val serverLayer = Server.defaultWith(serverConfig)
 
   private val clientLayer = ZLayer.make[Client](
     ZLayer.succeed(ZClient.Config.default.connectionTimeout(5.seconds)),
@@ -68,15 +85,27 @@ object Main extends ZIOAppDefault:
     ZLayer.succeed(NettyConfig.defaultWithFastShutdown),
   )
 
-  override def run: ZIO[Any & ZIOAppArgs, Any, Any] = {
-    val config = configs(scala.util.Random.nextInt(configs.length))
-
+  private val program: ZIO[Scope & Client, Throwable, Unit] = 
     ZIO.scoped {
-      program
-        .provideSomeLayer(
-          clientLayer ++
-          ZLayer.succeed(BookRepoStd) ++ 
-          ZLayer.succeed(config)
-          )
-    }.exitCode
+      for {
+        bookEndpoint <- ZIO.service[BookEndpoint]
+        routes <- bookEndpoint.routes
+
+        shutdownPromise <- Promise.make[Nothing, Unit]
+        server <- Server.serve(routes).provide(serverLayer).fork
+        _ <- shutdownPromise.await.onInterrupt(server.interrupt)
+      } yield ()
+    }
+
+  override def run: ZIO[ZIOAppArgs, Any, Any] = {
+    program
+      .provideSomeLayer(
+        AwsEnvironment.live ++            // Provide AwsEnvironment
+        clientLayer ++                    // Provide ZClient (Client)
+        SecretKeyManager.live ++          // Provide SecretKeyManager (depends on AwsEnvironment & ZClient)
+        Authentication.live ++            // Provide Authentication (depends on SecretKeyManager)
+        BookRepo.mock ++                  // Provide mock BookRepo
+        BookEndpoint.live                 // Provide BookEndpoint
+      ).exitCode
   }
+      */

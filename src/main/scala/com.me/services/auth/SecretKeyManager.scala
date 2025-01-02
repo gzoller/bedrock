@@ -1,7 +1,11 @@
 package com.me
+package services
 package auth
 
-import zio._
+import aws.AwsEnvironment
+
+import zio.*
+import zio.http.*
 import software.amazon.awssdk.auth.credentials.{AwsBasicCredentials, DefaultCredentialsProvider, StaticCredentialsProvider}
 import software.amazon.awssdk.services.secretsmanager.SecretsManagerClient
 import software.amazon.awssdk.regions.Region
@@ -15,7 +19,11 @@ case class Key(version: String, value: String)
 /**
   * Get a secret from AWS Secrets Manager
   */
-case class SecretKeyManager(awsRegion: Option[Region]):
+trait SecretKeyManager:
+  def getSecretKey: ZIO[Any, Throwable, (Key, Option[Key])]
+
+
+final case class LiveSecretKeyManager(awsRegion: Option[Region]) extends SecretKeyManager:
 
   def getSecretKey: ZIO[Any, Throwable, (Key,Option[Key])] = 
     ZIO.attemptBlocking {
@@ -79,4 +87,10 @@ case class SecretKeyManager(awsRegion: Option[Region]):
         } finally {
             secretsClient.close()
         }
+    }
+
+object SecretKeyManager:
+  def live: ZLayer[AwsEnvironment & ZClient[Any, Scope, Body, Throwable, Response], Throwable, SecretKeyManager] =
+    ZLayer.fromZIO {
+      ZIO.serviceWithZIO[AwsEnvironment](_.getRegion).map( r => LiveSecretKeyManager(r) )
     }
