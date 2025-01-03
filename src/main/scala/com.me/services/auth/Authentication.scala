@@ -22,6 +22,7 @@ object GeneralFailure:
 trait Authentication:
   def login(username: String, password: String): ZIO[Any, Either[GeneralFailure, BadCredentialError], String] // returns a token
   def jwtEncode(username: String, key: String): String
+  def updateKeys: ZIO[Any, Throwable, Unit]
   // def readSecretKeys: ZIO[Any, Throwable, Unit]
   // def rotateToken: ZIO[Any, Throwable, String]
   def bearerAuthWithContext: HandlerAspect[Any, String]
@@ -34,6 +35,15 @@ final case class LiveAuthentication(
 )extends Authentication:
 
   implicit val clock: Clock = Clock.systemUTC
+
+  def updateKeys: ZIO[Any, Throwable, Unit] =
+    for {
+      (newCurrent, newPrevious) <- secretKeyManager.getSecretKey
+      _ <- ZIO.logInfo(s"New keys loaded: ($newCurrent, ${newPrevious.getOrElse("None")})")
+    } yield {
+      currentSecretKey = newCurrent
+      previousSecretKey = newPrevious
+    }
 
   // The idea here is we hit a database or something to validate the credentials. Only 3 possible outcomes are allowed:
   //  1. successful -- credentials are good, in which case we return a generated token

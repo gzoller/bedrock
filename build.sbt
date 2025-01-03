@@ -39,9 +39,11 @@ lazy val root = project
       "dev.zio" %% "zio" % "2.1.12",
       "dev.zio" %% "zio-http" % "0.0.0+1826-1f8ef1ff+20241212-0015-SNAPSHOT", //"3.0.1",
       // "dev.zio" %% "zio-http-cli" % "3.0.1", // If you want a runnable CLI
-      "software.amazon.awssdk" % "secretsmanager" % "2.20.0", // Secrets Manager SDK
       "software.amazon.awssdk" % "core" % "2.20.0",            // AWS SDK Core
+      "software.amazon.awssdk" % "secretsmanager" % "2.20.0",  // Secrets Manager SDK
+      "software.amazon.awssdk" % "eventbridge" % "2.29.43",    // EventBridge 
       "ch.qos.logback" % "logback-classic" % "1.4.6",
+      "com.github.jwt-scala" %% "jwt-core" % "10.0.1",
       "com.github.jwt-scala" %% "jwt-core" % "10.0.1",
       "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-core" % "2.20.3",
       "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-macros" % "2.20.3" % "provided",
