@@ -2,20 +2,25 @@ package com.me
 package services
 package auth
 
-import aws.AwsEnvironment
-import db.BookRepo
-
 import java.time.Clock
 import scala.util.Try
 import zio.*
+import zio.schema.{DeriveSchema, Schema}
 import zio.http.*
 import pdi.jwt.{Jwt, JwtAlgorithm, JwtClaim}
 import com.github.plokhotnyuk.jsoniter_scala.core._
 import com.github.plokhotnyuk.jsoniter_scala.macros._
-import software.amazon.awssdk.regions.Region
+
+case class BadCredentialError(message: String)
+case class GeneralFailure(message: String)
+
+object BadCredentialError:
+  implicit val schema: Schema[BadCredentialError] = DeriveSchema.gen
+object GeneralFailure:
+  implicit val schema: Schema[GeneralFailure] = DeriveSchema.gen
 
 trait Authentication:
-  def login(username: String, password: String): ZIO[Any, Throwable, String] // returns a token
+  def login(username: String, password: String): ZIO[Any, Either[GeneralFailure, BadCredentialError], String] // returns a token
   def jwtEncode(username: String, key: String): String
   // def readSecretKeys: ZIO[Any, Throwable, Unit]
   // def rotateToken: ZIO[Any, Throwable, String]
@@ -30,7 +35,12 @@ final case class LiveAuthentication(
 
   implicit val clock: Clock = Clock.systemUTC
 
-  def login(username: String, password: String): ZIO[Any, Throwable, String] =
+  // The idea here is we hit a database or something to validate the credentials. Only 3 possible outcomes are allowed:
+  //  1. successful -- credentials are good, in which case we return a generated token
+  //  2. bad creds  -- Return a Right[BadCredentialError]
+  //  3. anything else at all -- Return a Left[GeneralFailure] (log the real error of course, but just return GeneralFailure)
+  def login(username: String, password: String): ZIO[Any, Either[GeneralFailure, BadCredentialError], String] =
+    // ZIO.fail(Left(GeneralFailure("boom")))
     ZIO.succeed(jwtEncode(username, currentSecretKey.value))
 
   // Define a case class to parse the payload

@@ -13,6 +13,7 @@ Starting point for REST service
 * Get access to the encoded user id from jtw token in handler
 
 IN-PROGRESS:
+* Make BookRepo into a ZIO and wire in proper error returns, eg GeneralFailure for db errors
 * Figure out secret key rotation:
    - retrieve versioned keys (current/previous) DONE
    - figure out how to handle transition period where 2 keys are valid at the same time for a short defined window
