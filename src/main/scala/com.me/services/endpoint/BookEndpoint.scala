@@ -2,8 +2,7 @@ package com.me
 package services
 package endpoint
 
-import auth.Authentication
-import auth.Authentication.*
+import auth.*
 import db.BookRepo
 
 import zio.*
@@ -12,10 +11,10 @@ import zio.http.codec.*
 import zio.http.codec.PathCodec.*
 import zio.http.endpoint.{AuthType,Endpoint}
 import zio.http.endpoint.openapi.*
-import zio.http.endpoint.openapi.OpenAPI.{Components,Key,ReferenceOr,SecurityScheme}
+import zio.http.endpoint.openapi.OpenAPI.{Components,Key,ReferenceOr}
 import zio.http.endpoint.openapi.OpenAPI.SecurityScheme.*
 import scala.collection.immutable.ListMap
-import zio.http.Status.InternalServerError
+import zio.schema._
 
 trait BookEndpoint:
   def routes: ZIO[Any, Nothing, Routes[Any, Response]]
@@ -68,39 +67,24 @@ final case class LiveBookEndpoint( auth: Authentication, bookRepo: BookRepo ) ex
   // --------- Login message
   //===============================================================
   val login_endpoint = Endpoint((RoutePattern.GET / "login") ?? Doc.p("Mock of a user login form to obtain auth token"))
-      .out[String](MediaType.text.plain, Doc.p("Got me a token!")) // force plaintext response, not JSON
+    .out[String](MediaType.text.plain, Doc.p("Got me a token!")) // force plaintext response, not JSON
+    .outError[BadCredentialError](Status.Unauthorized)
+    .outError[GeneralFailure](Status.InternalServerError)
 
   // In real life user id and password would be submitted via a web form (POST). The user/pwd looked up in some table,
   // and finally the userId + secret would be used to encode a token. Possibly we might want to encode a session id
   // instead of userId, if a session context is desirable.
-  /*
-  val login_handler: Handler[Authentication, Nothing, Unit, Response] = 
+
+  val login_handler: Handler[Any, Either[GeneralFailure, BadCredentialError], Unit, String] =
     Handler.fromFunctionZIO { (_: Unit) =>
-      ZIO.serviceWithZIO[Authentication] { auth =>
-        auth
-          .login("bogus_user", "pwd") // Attempt to login
-          .map(token => Response.text(s"Login successful: $token")) // Map success to a Response
-          .catchAll { err => // Handle errors
-            ZIO.logError(s"Login failed: ${err.getMessage}") *>
-            ZIO.succeed(Response.error(InternalServerError, err.getMessage))
-          }
-      }
-    }
-      */
-  val login_handler: Handler[Any, Nothing, Unit, String] =
-    Handler.fromFunctionZIO { (_: Unit) =>
-      auth
-        .login("bogus_user", "pwd")
-        .map(token => s"Status: 200, Body: Login successful: $token")
-        .catchAll { err =>
-          ZIO.logError(s"Login failed: ${err.getMessage}") *>
-          ZIO.succeed(s"Status: 401, Body: Invalid login: ${err.getMessage}")
-        }
+      auth.login("bogus_user", "pwd")
     }
 
   val loginRoute = Routes(login_endpoint.implementHandler(login_handler))
+
   
   // --------- Swagger, if non-prod
+  //===============================================================
   val swaggerRoutes = 
     if com.me.MyBuildInfo.isProd then
       Routes.empty // disable Swagger for prod deployment

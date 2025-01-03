@@ -10,7 +10,6 @@ import software.amazon.awssdk.auth.credentials.{AwsBasicCredentials, DefaultCred
 import software.amazon.awssdk.services.secretsmanager.SecretsManagerClient
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.secretsmanager.model.{GetSecretValueRequest, GetSecretValueResponse, ListSecretVersionIdsRequest}
-import software.amazon.awssdk.core.client.config.ClientOverrideConfiguration
 import scala.jdk.CollectionConverters.*
 
 

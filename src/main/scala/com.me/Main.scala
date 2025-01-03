@@ -5,7 +5,6 @@ import auth.{Authentication, SecretKeyManager}
 import db.BookRepo
 
 import zio.*
-import zio.Console.*
 import zio.http.*
 
 import aws.AwsEnvironment
