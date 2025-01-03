@@ -17,7 +17,7 @@ import scala.collection.immutable.ListMap
 import zio.schema._
 
 trait BookEndpoint:
-  def routes: ZIO[Any, Nothing, Routes[Any, Response]]
+  def routes: Routes[Any, zio.http.Response]
 
 
 final case class LiveBookEndpoint( auth: Authentication, bookRepo: BookRepo ) extends BookEndpoint:
@@ -99,14 +99,9 @@ final case class LiveBookEndpoint( auth: Authentication, bookRepo: BookRepo ) ex
           )
       SwaggerUI.routes("docs" / "openapi", openAPI)
 
-// TODO: Make this BookEndpoint a service, inject BookRepo on creation, then the normal bearerAuthWithContext should work
-// because Handler can just be String, not String & BookRepo
-
   // --------- Bundle up all routes
-  def routes: ZIO[Any, Nothing, Routes[Any, Response]] =
-    // Get Authentication from environment--it was provided in Main to the program
-    val combined: Routes[Any, zio.http.Response] = loginRoute ++ (bookSearchRoute ++ helloRoute) @@ auth.bearerAuthWithContext ++ swaggerRoutes
-    ZIO.succeed(combined)
+  def routes =
+    loginRoute ++ (bookSearchRoute ++ helloRoute) @@ auth.bearerAuthWithContext ++ swaggerRoutes
 
 
 object BookEndpoint:

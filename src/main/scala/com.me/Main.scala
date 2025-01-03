@@ -12,6 +12,7 @@ import services.endpoint.BookEndpoint
 
 import zio.http.netty.*
 import zio.http.netty.client.NettyClientDriver
+import com.me.services.endpoint.AwsEventEndpoint
 
 object Main extends ZIOAppDefault {
 
@@ -31,12 +32,12 @@ object Main extends ZIOAppDefault {
     ZLayer.succeed(NettyConfig.defaultWithFastShutdown)
   )
 
-  // val program: ZIO[Client & Server & AwsEnvironment & SecretKeyManager & Authentication & BookRepo & BookEndpoint, Throwable, Unit] =
-  val program: ZIO[Server & BookEndpoint, Throwable, Unit] =
+  val program: ZIO[Server & BookEndpoint & AwsEventEndpoint, Throwable, Unit] =
     ZIO.scoped {
       for {
         bookEndpoint <- ZIO.service[BookEndpoint]
-        routes        <- bookEndpoint.routes
+        awsEventEndpoint <- ZIO.service[AwsEventEndpoint]
+        routes <- ZIO.succeed(bookEndpoint.routes ++ awsEventEndpoint.routes)
         shutdownPromise <- Promise.make[Nothing, Unit]
         server <- Server.serve(routes).provideLayer(serverLayer).fork
         _ <- shutdownPromise.await.onInterrupt(server.interrupt)
@@ -52,15 +53,19 @@ object Main extends ZIOAppDefault {
     val authenticationLayer: ZLayer[Any, Throwable, Authentication] =
       secretKeyManagerLayer >>> Authentication.live
 
-    val bookEndpointLayer: ZLayer[Any, Throwable, BookEndpoint] =
-      authenticationLayer ++ BookRepo.mock >>> BookEndpoint.live
+    val bookEndpointLayer: ZLayer[Any, Nothing, BookEndpoint] =
+      authenticationLayer.orDie ++ BookRepo.mock >>> BookEndpoint.live
+
+    val awsEndpointLayer: ZLayer[Any, Throwable, AwsEventEndpoint] =
+      authenticationLayer >>> AwsEventEndpoint.live
 
     program.provide(
       serverLayer ++                     // Provide server
       clientLayer ++                     // Provide ZClient
       secretKeyManagerLayer ++           // Provide SecretKeyManager
       authenticationLayer ++             // Provide Authentication
-      bookEndpointLayer                  // Provide BookEndpoint
+      bookEndpointLayer ++               // Provide BookEndpoint
+      awsEndpointLayer                   // Provide AwsEventEndpoints
     ).exitCode      
   }
 }

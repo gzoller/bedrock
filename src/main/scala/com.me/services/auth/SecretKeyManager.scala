@@ -25,68 +25,71 @@ trait SecretKeyManager:
 final case class LiveSecretKeyManager(awsRegion: Option[Region]) extends SecretKeyManager:
 
   def getSecretKey: ZIO[Any, Throwable, (Key,Option[Key])] = 
-    ZIO.attemptBlocking {
-        val secretName = "MySecretKey"
+    for {
+      outcome <- ZIO.attemptBlocking {
+          val secretName = "MySecretKey"
 
-        val (endpointOverride, credentialsProvider) = if !awsRegion.isDefined then 
-            // LocalStack configuration if no actual AWS is found
-            (
-              Some(new java.net.URI("http://localhost:4566")), // LocalStack endpoint
-              StaticCredentialsProvider.create(AwsBasicCredentials.create("foo", "bar")) // Mock credentials
-            )
-          else
-            // Non-local configuration, ie running on real AWS (uses default AWS credentials)
-            (None, DefaultCredentialsProvider.create())
+          val (endpointOverride, credentialsProvider) = if !awsRegion.isDefined then 
+              // LocalStack configuration if no actual AWS is found
+              (
+                Some(new java.net.URI("http://localhost:4566")), // LocalStack endpoint
+                StaticCredentialsProvider.create(AwsBasicCredentials.create("foo", "bar")) // Mock credentials
+              )
+            else
+              // Non-local configuration, ie running on real AWS (uses default AWS credentials)
+              (None, DefaultCredentialsProvider.create())
 
-        val secretsClientBuilder = SecretsManagerClient.builder()
-          .region( awsRegion.getOrElse(Region.US_EAST_1) )
-          .credentialsProvider(credentialsProvider)
-        endpointOverride.map( secretsClientBuilder.endpointOverride )
-        val secretsClient = secretsClientBuilder.build()
-        
-        try {
-          val versionsRequest = ListSecretVersionIdsRequest.builder()
-            .secretId(secretName)
-            .build()
-          val versionsResponse = secretsClient.listSecretVersionIds(versionsRequest)
-          val currentVersion = versionsResponse.versions.asScala.find(_.versionStages.contains("AWSCURRENT")).map(_.versionId)
-            .getOrElse(throw new Exception("No current version found for secret")) // There must be a current version!
-          val previousVersion = versionsResponse.versions.asScala.find(_.versionStages.contains("AWSPREVIOUS")).map(_.versionId)
-          // There may or may not be a previous version.
-
-          // Create a request to retrieve the current secret
-          val currentSecret = {
-            val getSecretValueRequest = GetSecretValueRequest.builder()
+          val secretsClientBuilder = SecretsManagerClient.builder()
+            .region( awsRegion.getOrElse(Region.US_EAST_1) )
+            .credentialsProvider(credentialsProvider)
+          endpointOverride.map( secretsClientBuilder.endpointOverride )
+          val secretsClient = secretsClientBuilder.build()
+          
+          try {
+            val versionsRequest = ListSecretVersionIdsRequest.builder()
               .secretId(secretName)
-              .versionId(currentVersion)
               .build()
+            val versionsResponse = secretsClient.listSecretVersionIds(versionsRequest)
+            val currentVersion = versionsResponse.versions.asScala.find(_.versionStages.contains("AWSCURRENT")).map(_.versionId)
+              .getOrElse(throw new Exception("No current version found for secret")) // There must be a current version!
+            val previousVersion = versionsResponse.versions.asScala.find(_.versionStages.contains("AWSPREVIOUS")).map(_.versionId)
+            // There may or may not be a previous version.
 
-            // Fetch the secret value
-            val getSecretValueResponse: GetSecretValueResponse = secretsClient.getSecretValue(getSecretValueRequest)
+            // Create a request to retrieve the current secret
+            val currentSecret = {
+              val getSecretValueRequest = GetSecretValueRequest.builder()
+                .secretId(secretName)
+                .versionId(currentVersion)
+                .build()
 
-            // Return the secret string
-            Key(currentVersion, getSecretValueResponse.secretString())
-            }
+              // Fetch the secret value
+              val getSecretValueResponse: GetSecretValueResponse = secretsClient.getSecretValue(getSecretValueRequest)
 
-          // Create a request to retrieve the current secret
-          val previousSecret = previousVersion.map{ prevVer => 
-            val getSecretValueRequest = GetSecretValueRequest.builder()
-              .secretId(secretName)
-              .versionId(prevVer)
-              .build()
+              // Return the secret string
+              Key(currentVersion, getSecretValueResponse.secretString())
+              }
 
-            // Fetch the secret value
-            val getSecretValueResponse: GetSecretValueResponse = secretsClient.getSecretValue(getSecretValueRequest)
+            // Create a request to retrieve the current secret
+            val previousSecret = previousVersion.map{ prevVer => 
+              val getSecretValueRequest = GetSecretValueRequest.builder()
+                .secretId(secretName)
+                .versionId(prevVer)
+                .build()
 
-            // Return the secret string
-            Key(prevVer, getSecretValueResponse.secretString())
-            }
+              // Fetch the secret value
+              val getSecretValueResponse: GetSecretValueResponse = secretsClient.getSecretValue(getSecretValueRequest)
 
-            (currentSecret, previousSecret)
-        } finally {
-            secretsClient.close()
+              // Return the secret string
+              Key(prevVer, getSecretValueResponse.secretString())
+              }
+
+              (currentSecret, previousSecret)
+          } finally {
+              secretsClient.close()
+          }
         }
-    }
+      _ <- ZIO.logInfo("Loaded secret keys")
+    } yield (outcome)
 
 object SecretKeyManager:
   def live: ZLayer[AwsEnvironment & ZClient[Any, Scope, Body, Throwable, Response], Throwable, SecretKeyManager] =

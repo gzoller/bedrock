@@ -14,6 +14,9 @@ Starting point for REST service
 
 IN-PROGRESS:
 * Make BookRepo into a ZIO and wire in proper error returns, eg GeneralFailure for db errors
+* Figure out how to use EventBridge
+* Figure out how to do integration testing in sbt
+* Separate unit and integration tests with mocks for unit
 * Figure out secret key rotation:
    - retrieve versioned keys (current/previous) DONE
    - figure out how to handle transition period where 2 keys are valid at the same time for a short defined window
