@@ -13,8 +13,6 @@ import software.amazon.awssdk.services.secretsmanager.model.{GetSecretValueReque
 import scala.jdk.CollectionConverters.*
 
 
-case class Key(version: String, value: String)
-
 /**
   * Get a secret from AWS Secrets Manager
   */
@@ -66,7 +64,7 @@ final case class LiveSecretKeyManager(awsRegion: Option[Region]) extends SecretK
               val getSecretValueResponse: GetSecretValueResponse = secretsClient.getSecretValue(getSecretValueRequest)
 
               // Return the secret string
-              Key(currentVersion, getSecretValueResponse.secretString())
+              Key(currentVersion, getSecretValueResponse.secretString(), getSecretValueResponse.createdDate)
               }
 
             // Create a request to retrieve the current secret
@@ -80,7 +78,7 @@ final case class LiveSecretKeyManager(awsRegion: Option[Region]) extends SecretK
               val getSecretValueResponse: GetSecretValueResponse = secretsClient.getSecretValue(getSecretValueRequest)
 
               // Return the secret string
-              Key(prevVer, getSecretValueResponse.secretString())
+              Key(prevVer, getSecretValueResponse.secretString(), getSecretValueResponse.createdDate)
               }
 
               (currentSecret, previousSecret)

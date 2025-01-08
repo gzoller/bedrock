@@ -1,7 +1,7 @@
 package com.me
 
 import services.* 
-import auth.{Authentication, SecretKeyManager}
+import auth.*
 import db.BookRepo
 
 import zio.*
@@ -32,14 +32,15 @@ object Main extends ZIOAppDefault {
     ZLayer.succeed(NettyConfig.defaultWithFastShutdown)
   )
 
-  val program: ZIO[Server & BookEndpoint & AwsEventEndpoint, Throwable, Unit] =
+  // val program: ZIO[Server & BookEndpoint & AwsEventEndpoint, Throwable, Unit] =
+  val program =
     ZIO.scoped {
       for {
         bookEndpoint <- ZIO.service[BookEndpoint]
         awsEventEndpoint <- ZIO.service[AwsEventEndpoint]
         routes <- ZIO.succeed(bookEndpoint.routes ++ awsEventEndpoint.routes)
         shutdownPromise <- Promise.make[Nothing, Unit]
-        server <- Server.serve(routes).provideLayer(serverLayer).fork
+        server <- Server.serve(routes).fork //.provideLayer(serverLayer).fork
         _ <- shutdownPromise.await.onInterrupt(server.interrupt)
       } yield ()
     }

@@ -17,7 +17,7 @@ import scala.collection.immutable.ListMap
 import zio.schema._
 
 trait BookEndpoint:
-  def routes: Routes[Any, zio.http.Response]
+  def routes: Routes[Any, Response]
 
 
 final case class LiveBookEndpoint( auth: Authentication, bookRepo: BookRepo ) extends BookEndpoint:
@@ -47,8 +47,8 @@ final case class LiveBookEndpoint( auth: Authentication, bookRepo: BookRepo ) ex
 
   // The String here in the Handler R type is the user id, pulled from the decrypted token, ie. the "subject".
   // In a production server this could be a more complex session object, or a session id, etc.
-  val book_handler: Handler[String, Nothing, (String,Int), List[Book]] = handler { (query: String, num: Int) =>
-    withContext((user: String) => bookRepo.find(query) )
+  val book_handler: Handler[Session, Nothing, (String,Int), List[Book]] = handler { (query: String, num: Int) =>
+    withContext((session: Session) => bookRepo.find(query) )
   }
   val bookSearchRoute = Routes(book_endpoint.implementHandler(book_handler))
 
@@ -58,8 +58,11 @@ final case class LiveBookEndpoint( auth: Authentication, bookRepo: BookRepo ) ex
   val hello_endpoint = Endpoint(RoutePattern.GET / "hello" ?? (Doc.p("Say hello to the people") + authHeaderDoc))
     .out[String](MediaType.text.plain, Doc.p("Just a hello message")) // force plaintext response, not JSON
     .auth[AuthType.Bearer](AuthType.Bearer)
-  val hello_handler: Handler[String, Nothing, Unit, String] = handler { (_: Unit) =>
-    withContext((user: String) => s"Hello, World, $user!")
+
+  val hello_handler = handler { (_: Unit) =>
+    ZIO.service[Session].map{ session =>
+      s"Hello, World, ${session.userId}!"
+    }
   }
   val helloRoute = Routes(hello_endpoint.implementHandler(hello_handler))
 
@@ -100,10 +103,18 @@ final case class LiveBookEndpoint( auth: Authentication, bookRepo: BookRepo ) ex
       SwaggerUI.routes("docs" / "openapi", openAPI)
 
   // --------- Bundle up all routes
-  def routes =
-    loginRoute ++ (bookSearchRoute ++ helloRoute) @@ auth.bearerAuthWithContext ++ swaggerRoutes
+  def routes = {
+    // Provide a default SessionContext for unsecured routes
+    val unsecuredRoutes = loginRoute ++ swaggerRoutes
 
+    // Secured routes with bearerAuthWithContext
+    val securedRoutes = (bookSearchRoute ++ helloRoute) @@ auth.bearerAuthWithContext //auth.statefulAspect 
 
+    // Combine both
+    unsecuredRoutes ++ securedRoutes
+  }
+
+  
 object BookEndpoint:
   def live: ZLayer[Authentication & BookRepo, Nothing, BookEndpoint] =
     ZLayer.fromZIO {
