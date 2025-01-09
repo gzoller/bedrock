@@ -50,7 +50,7 @@ final case class LiveBookEndpoint( auth: Authentication, bookRepo: BookRepo ) ex
   val book_handler: Handler[Session, Nothing, (String,Int), List[Book]] = handler { (query: String, num: Int) =>
     withContext((session: Session) => bookRepo.find(query) )
   }
-  val bookSearchRoute = Routes(book_endpoint.implementHandler(book_handler))
+  val bookSearchRoute = Routes(book_endpoint.implementHandler(book_handler)) @@ auth.bearerAuthWithContext
 
 
   // --------- Hello message
@@ -64,7 +64,7 @@ final case class LiveBookEndpoint( auth: Authentication, bookRepo: BookRepo ) ex
       s"Hello, World, ${session.userId}!"
     }
   }
-  val helloRoute = Routes(hello_endpoint.implementHandler(hello_handler))
+  val helloRoute = Routes(hello_endpoint.implementHandler(hello_handler)) @@ auth.bearerAuthWithContext
 
 
   // --------- Login message
@@ -108,13 +108,13 @@ final case class LiveBookEndpoint( auth: Authentication, bookRepo: BookRepo ) ex
     val unsecuredRoutes = loginRoute ++ swaggerRoutes
 
     // Secured routes with bearerAuthWithContext
-    val securedRoutes = (bookSearchRoute ++ helloRoute) @@ auth.bearerAuthWithContext //auth.statefulAspect 
+    val securedRoutes = bookSearchRoute ++ helloRoute 
 
     // Combine both
     unsecuredRoutes ++ securedRoutes
   }
 
-  
+
 object BookEndpoint:
   def live: ZLayer[Authentication & BookRepo, Nothing, BookEndpoint] =
     ZLayer.fromZIO {

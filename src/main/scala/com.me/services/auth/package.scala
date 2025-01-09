@@ -13,8 +13,8 @@ object BadCredentialError:
 object GeneralFailure:
   implicit val schema: Schema[GeneralFailure] = DeriveSchema.gen
 
-case class SessionContext(userId: String, token: Option[String])
 type AuthToken = Option[String]
+
 case class Session(userId: String)
 
 case class Key(version: String, value: String, instantCreated: Instant)

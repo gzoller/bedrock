@@ -5,6 +5,12 @@ import zio.test.*
 import zio.test.Assertion.*
 import zio.http.*
 import zio.http.endpoint.*
+import services.endpoint.*
+import services.db.*
+import services.auth.*
+import com.typesafe.config.ConfigFactory
+import java.time.Instant
+import software.amazon.awssdk.regions.Region
 
 /**
   * This lovely thing runs the services' routes directly, without the drama
@@ -19,15 +25,37 @@ object BookServiceSpec extends ZIOSpecDefault {
       else List.empty
   }
 
-  val bookService = BookService(bookRepoMock, "secretKey")
+  val appConfig = ConfigFactory.load()
+  val liveAuth = LiveAuthentication(
+    appConfig, 
+    LiveSecretKeyManager(appConfig, Some(Region.US_EAST_1)), 
+    Key("bogus_version","secretKey",Instant.now()), 
+    None)
+
+  val bookService = LiveBookEndpoint(liveAuth, bookRepoMock)
 
   var authToken: String = ""
 
   def spec = suite("BookServiceSpec")(
-    test("Unauthorized access should fail") {
+    test("Unauthorized access should fail (no token)") {
       val request = Request.get(URL.root / "hello")
+      val session = Session("bogus_user") // Create a bogus session
+
       for {
-        response <- bookService.helloRoute.run(request)
+        response <- bookService.helloRoute
+                      .provideEnvironment(ZEnvironment(session)) // Inject the session
+                      .runZIO(request)                           // Run the route with ZIO environment
+        body <- response.body.asString
+      } yield assert(response.status)(equalTo(Status.Unauthorized))
+    },
+    test("Unauthorized access should fail (bad token)") {
+      val request = Request.get(URL.root / "hello").addHeader(Header.Authorization.Bearer("bogus_token"))
+      val session = Session("bogus_user") // Create a bogus session
+
+      for {
+        response <- bookService.helloRoute
+                      .provideEnvironment(ZEnvironment(session)) // Inject the session
+                      .runZIO(request)                           // Run the route with ZIO environment
         body <- response.body.asString
       } yield assert(response.status)(equalTo(Status.Unauthorized))
     },
@@ -42,17 +70,20 @@ object BookServiceSpec extends ZIOSpecDefault {
         b
         }
     },
-    test("should return a list of books for a valid query") {
+    test("authenticated request should return a list of books for a valid query") {
       val request = Request.get((URL.root / "books").addQueryParams("q=zio&num=2")).addHeader(Header.Authorization.Bearer(authToken))
+      val session = Session("bogus_user") // Create a bogus session
       val expectedResponse = """[{"title":"ZIO in Action","authors":["John Doe"],"year":2021}]"""
 
       for {
-        response <- bookService.booksRoute.run(request)
+        response <- bookService.bookSearchRoute
+                      .provideEnvironment(ZEnvironment(session)) // Inject the session
+                      .runZIO(request)                           // Run the route with ZIO environment
         body <- response.body.asString
       } yield assert(response.status)(equalTo(Status.Ok)) &&
         assert(body)(equalTo(expectedResponse))
     },
-    test("should return a hello message") {
+    test("authenticated request should return a hello message") {
       val request = Request.get(URL.root / "hello").addHeader(Header.Authorization.Bearer(authToken))
       val expectedResponse = "Hello, World, bogus_user!"
 

@@ -11,6 +11,7 @@ import software.amazon.awssdk.services.secretsmanager.SecretsManagerClient
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.secretsmanager.model.{GetSecretValueRequest, GetSecretValueResponse, ListSecretVersionIdsRequest}
 import scala.jdk.CollectionConverters.*
+import com.typesafe.config.Config
 
 
 /**
@@ -20,17 +21,17 @@ trait SecretKeyManager:
   def getSecretKey: ZIO[Any, Throwable, (Key, Option[Key])]
 
 
-final case class LiveSecretKeyManager(awsRegion: Option[Region]) extends SecretKeyManager:
+final case class LiveSecretKeyManager(appConfig: Config, awsRegion: Option[Region]) extends SecretKeyManager:
 
   def getSecretKey: ZIO[Any, Throwable, (Key,Option[Key])] = 
     for {
       outcome <- ZIO.attemptBlocking {
-          val secretName = "MySecretKey"
+          val secretName = appConfig.getString("app.auth.secret_name")
 
           val (endpointOverride, credentialsProvider) = if !awsRegion.isDefined then 
               // LocalStack configuration if no actual AWS is found
               (
-                Some(new java.net.URI("http://localhost:4566")), // LocalStack endpoint
+                Some(new java.net.URI(appConfig.getString("app.auth.localstack_url"))), // LocalStack endpoint
                 StaticCredentialsProvider.create(AwsBasicCredentials.create("foo", "bar")) // Mock credentials
               )
             else
@@ -90,7 +91,11 @@ final case class LiveSecretKeyManager(awsRegion: Option[Region]) extends SecretK
     } yield (outcome)
 
 object SecretKeyManager:
-  def live: ZLayer[AwsEnvironment & ZClient[Any, Scope, Body, Throwable, Response], Throwable, SecretKeyManager] =
+  def live: ZLayer[Config & AwsEnvironment & ZClient[Any, Scope, Body, Throwable, Response], Throwable, SecretKeyManager] =
     ZLayer.fromZIO {
-      ZIO.serviceWithZIO[AwsEnvironment](_.getRegion).map( r => LiveSecretKeyManager(r) )
+      for {
+        appConfig <- ZIO.service[Config]
+        awsEnv <- ZIO.service[AwsEnvironment]
+        region <- awsEnv.getRegion
+      } yield LiveSecretKeyManager(appConfig, region)
     }

@@ -13,15 +13,12 @@ Starting point for REST service
 * Get access to the encoded user id from jtw token in handler
 
 IN-PROGRESS:
-* Make BookRepo into a ZIO and wire in proper error returns, eg GeneralFailure for db errors
-* Figure out how to use EventBridge
 * Figure out how to do integration testing in sbt
 * Separate unit and integration tests with mocks for unit
 * Figure out secret key rotation:
    - retrieve versioned keys (current/previous) DONE
-   - figure out how to handle transition period where 2 keys are valid at the same time for a short defined window
-   - figure out how to subscribe to EventBridge and listen for events trigering a re-read of keys from Secrets Manager
-   - figure out how to injet secret keys into Authentication code
+   - figure out how to handle transition period where 2 keys are valid at the same time for a short defined window - NEEDS TESTING
+   - using a config setting, determine when to re-gen a new bearer token prior to expiration, eg 7 min expiration, so re-gen at 2 min before - NEEDS TESTING
 
 TODO:
 * Auto-generate Swagger config (fixed with my own mods to ZIO HTTP...PR pending)

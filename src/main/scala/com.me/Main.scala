@@ -13,6 +13,7 @@ import services.endpoint.BookEndpoint
 import zio.http.netty.*
 import zio.http.netty.client.NettyClientDriver
 import com.me.services.endpoint.AwsEventEndpoint
+import com.typesafe.config.{Config, ConfigFactory}
 
 object Main extends ZIOAppDefault {
 
@@ -46,71 +47,49 @@ object Main extends ZIOAppDefault {
     }
 
   override def run: URIO[Any, ExitCode] = {
-    // Bunch of composition here to help untangle dependencies...
-    //
-    val secretKeyManagerLayer: ZLayer[Any, Throwable, SecretKeyManager] =
-      AwsEnvironment.live ++ clientLayer >>> SecretKeyManager.live      
 
-    val authenticationLayer: ZLayer[Any, Throwable, Authentication] =
-      secretKeyManagerLayer >>> Authentication.live
+    type MyClient = ZClient[Any, Scope, Body, Throwable, Response]
 
-    val bookEndpointLayer: ZLayer[Any, Nothing, BookEndpoint] =
-      authenticationLayer.orDie ++ BookRepo.mock >>> BookEndpoint.live
+    // Config layer
+    val configLayer: ULayer[Config] = ZLayer.succeed(ConfigFactory.load())
 
-    val awsEndpointLayer: ZLayer[Any, Throwable, AwsEventEndpoint] =
+    // SecretKeyManager depends on Config and ZClient
+    val secretKeyManagerLayer: ZLayer[Config & MyClient, Throwable, SecretKeyManager] =
+      (AwsEnvironment.live ++ clientLayer >>> SecretKeyManager.live).catchAll { error =>
+        ZLayer.fromZIO {
+          ZIO.logErrorCause("Failed to initialize SecretKeyManager layer", Cause.fail(error)) *> ZIO.die(error)
+        }
+      }      
+
+    // Authentication depends on Config and SecretKeyManager
+    val authenticationLayer: ZLayer[Config & MyClient, Throwable, Authentication] =
+      (secretKeyManagerLayer >>> Authentication.live).catchAll { error =>
+        ZLayer.fromZIO {
+          ZIO.logErrorCause("Failed to initialize Authentication layer", Cause.fail(error)) *> ZIO.die(error)
+        }
+      }
+
+    // BookEndpoint depends on Authentication and BookRepo
+    val bookEndpointLayer: ZLayer[Config & MyClient, Nothing, BookEndpoint] =
+      ((authenticationLayer ++ BookRepo.mock) >>> BookEndpoint.live).catchAll { error =>
+        ZLayer.fromZIO {
+          ZIO.logErrorCause("Failed to initialize BookEndpoint layer", Cause.fail(error)) *> ZIO.die(error)
+        }
+      }
+
+    // AWS Event Endpoint depends on Authentication
+    val awsEndpointLayer: ZLayer[Config & MyClient, Throwable, AwsEventEndpoint] =
       authenticationLayer >>> AwsEventEndpoint.live
 
+    // Provide layers to the program
     program.provide(
-      serverLayer ++                     // Provide server
-      clientLayer ++                     // Provide ZClient
-      secretKeyManagerLayer ++           // Provide SecretKeyManager
-      authenticationLayer ++             // Provide Authentication
-      bookEndpointLayer ++               // Provide BookEndpoint
-      awsEndpointLayer                   // Provide AwsEventEndpoints
-    ).exitCode      
+      configLayer >+>                  // Provide Config
+      serverLayer >+>                  // Provide Server
+      clientLayer >+>                  // Provide ZClient
+      secretKeyManagerLayer >+>        // Provide SecretKeyManager
+      authenticationLayer >+>          // Provide Authentication
+      bookEndpointLayer >+>            // Provide BookEndpoint
+      awsEndpointLayer                // Provide AwsEventEndpoints
+    ).exitCode
   }
 }
-
-/*
-object Main extends ZIOAppDefault:
-
-  private val sslConfig = SSLConfig.fromResource(
-    behaviour = SSLConfig.HttpBehaviour.Fail, // Restrict everything to HTTPS--appropriate for enterprise server
-    certPath = "server.crt", 
-    keyPath = "server.key"
-  )
-  private val serverConfig = (config: Server.Config) => config.port(8073).ssl(sslConfig)
-  private val serverLayer = Server.defaultWith(serverConfig)
-
-  private val clientLayer = ZLayer.make[Client](
-    ZLayer.succeed(ZClient.Config.default.connectionTimeout(5.seconds)),
-    Client.customized,
-    NettyClientDriver.live,
-    DnsResolver.default,
-    ZLayer.succeed(NettyConfig.defaultWithFastShutdown),
-  )
-
-  private val program: ZIO[Scope & Client, Throwable, Unit] = 
-    ZIO.scoped {
-      for {
-        bookEndpoint <- ZIO.service[BookEndpoint]
-        routes <- bookEndpoint.routes
-
-        shutdownPromise <- Promise.make[Nothing, Unit]
-        server <- Server.serve(routes).provide(serverLayer).fork
-        _ <- shutdownPromise.await.onInterrupt(server.interrupt)
-      } yield ()
-    }
-
-  override def run: ZIO[ZIOAppArgs, Any, Any] = {
-    program
-      .provideSomeLayer(
-        AwsEnvironment.live ++            // Provide AwsEnvironment
-        clientLayer ++                    // Provide ZClient (Client)
-        SecretKeyManager.live ++          // Provide SecretKeyManager (depends on AwsEnvironment & ZClient)
-        Authentication.live ++            // Provide Authentication (depends on SecretKeyManager)
-        BookRepo.mock ++                  // Provide mock BookRepo
-        BookEndpoint.live                 // Provide BookEndpoint
-      ).exitCode
-  }
-      */

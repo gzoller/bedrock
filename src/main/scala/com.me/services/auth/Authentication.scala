@@ -10,6 +10,7 @@ import pdi.jwt.{Jwt, JwtAlgorithm, JwtClaim}
 import com.github.plokhotnyuk.jsoniter_scala.core._
 import com.github.plokhotnyuk.jsoniter_scala.macros._
 import java.time.Instant
+import com.typesafe.config.Config
 
 
 trait Authentication:
@@ -20,13 +21,17 @@ trait Authentication:
 
 
 final case class LiveAuthentication(
+  appConfig: Config,
   secretKeyManager: SecretKeyManager,
   @volatile private var currentSecretKey: Key,
   @volatile private var previousSecretKey: Option[Key]
-)extends Authentication:
+) extends Authentication:
 
   implicit val clock: Clock = Clock.systemUTC
 
+  /**
+    * Update the current and previous keys with the latest keys from the secret key manager.
+    */
   def updateKeys: ZIO[Any, Throwable, Unit] =
     for {
       (newCurrent, newPrevious) <- secretKeyManager.getSecretKey
@@ -49,7 +54,7 @@ final case class LiveAuthentication(
   implicit val payloadCodec: JsonValueCodec[JwtPayload] = JsonCodecMaker.make
 
   def jwtEncode(username: String, key: String): String =
-    Jwt.encode(JwtClaim(subject = Some(username)).issuedNow.expiresIn(300), key, JwtAlgorithm.HS512)
+    Jwt.encode(JwtClaim(subject = Some(username)).issuedNow.expiresIn( appConfig.getInt("app.auth.token_expiration_sec") ), key, JwtAlgorithm.HS512)
 
   private def jwtDecode(token: String, key: String): Try[JwtClaim] =
     Jwt.decode(token, key, Seq(JwtAlgorithm.HS512))
@@ -81,7 +86,22 @@ final case class LiveAuthentication(
         .flatMap { claim =>
           extractSubjectFromPayload(claim) match {
             case Some(subject) =>
-              ZIO.succeed( (Some("Yay, it worked!"), Session(subject)) )
+              // Before we say we're ok, let's check the time-to-live of the token. If its inside
+              // the window we'll go ahead and generate a new token and return it. (token rotation)
+              claim.expiration match {
+                case Some(expirationTime) =>
+                  val now = Instant.now().getEpochSecond // Current time in seconds
+                  if (expirationTime - now <= appConfig.getInt("app.auth.token_rotation_sec")) {
+                    // Soon... rotate token with current key
+                    ZIO.succeed( (Some(jwtEncode(subject, currentSecretKey.value)), Session(subject)) )
+                  } else
+                    // Not so soon... no need to re-gen token
+                    ZIO.succeed( (None, Session(subject)) )
+                case None =>
+                  // Sticky... we've successfully decoded the token but it has no expiration time, which is
+                  // invalid, so go ahead and re-gen a new one.
+                  ZIO.succeed( (Some(jwtEncode(subject, currentSecretKey.value)), Session(subject)) )
+              }
             case None =>
               ZIO.fail(Response.badRequest("Missing subject claim!"))
           }
@@ -90,7 +110,7 @@ final case class LiveAuthentication(
     // Decode using the previous key
     lazy val decodeWithPreviousKey: ZIO[Any, Response, (AuthToken, Session)] =
       previousSecretKey match {
-        case Some(key) if currentSecretKey.instantCreated.plusSeconds(300).isAfter(now) =>
+        case Some(key) if currentSecretKey.instantCreated.plusSeconds( appConfig.getInt("app.auth.old_token_grandfather_period_sec") ).isAfter(now) =>
           ZIO
             .fromTry(jwtDecode(rawToken, key.value))
             .mapError(_ => Response.unauthorized("Invalid or expired token!")) // Convert Throwable to Response
@@ -115,25 +135,32 @@ final case class LiveAuthentication(
     Handler.fromFunctionZIO[Request] { request =>
       request.header(Header.Authorization) match {
         case Some(Header.Authorization.Bearer(token)) =>
-            decodeToken(token.value.asString).flatMap { decoded =>
+          decodeToken(token.value.asString).flatMap { decoded =>
             val (authToken, session) = decoded
-            println("New Session: " + session)
-            // Structure the output as (AuthToken, (Request, Session))
             ZIO.succeed((authToken, (request, session)))
-            }
+          }
         case _ =>
-            ZIO.fail(
+          ZIO.fail(
             Response.unauthorized.addHeaders(
                 Headers(Header.WWWAuthenticate.Bearer(realm = "Access"))
             )
-            )
+          )
         }
     }
+
+  /**
+    * If our logic has determined that a new bearer token is needed, it will be generated and passed
+    * to this intercepte handler. If set, the handler will populate the Authorization header in
+    * the Response. The caller is responsible for monitoring this header and resetting their token
+    * for subsequent token-protected API calls.
+    */
   val responseInterceptH: Handler[Any, Nothing, (AuthToken, Response), Response] =
     Handler.fromFunctionZIO { case (authToken, response) =>
-        ZIO.succeed(
-        response.addHeader("X-Custom-Header", s"Hello from Custom Middleware! $authToken")
-        )
+      ZIO.succeed(
+        authToken
+          .map( newToken => response.addHeader(Header.Authorization.Bearer(newToken)))
+          .getOrElse(response)
+      )
     }
 
   def bearerAuthWithContext: HandlerAspect[Any, Session] = 
@@ -141,10 +168,11 @@ final case class LiveAuthentication(
 
 
 object Authentication:
-  def live: ZLayer[SecretKeyManager, Throwable, Authentication] =
+  def live: ZLayer[Config & SecretKeyManager, Throwable, Authentication] =
     ZLayer.fromZIO {
       for {
         manager         <- ZIO.service[SecretKeyManager]
+        appConfig       <- ZIO.service[Config]
         (currentKey, previousKey) <- manager.getSecretKey
-      } yield LiveAuthentication(manager, currentKey, previousKey)
+      } yield LiveAuthentication(appConfig, manager, currentKey, previousKey)
     }
