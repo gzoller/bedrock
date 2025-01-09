@@ -1,0 +1,74 @@
+import zio._
+import zio.http._
+import zio.json._
+
+import java.net.URI
+import zio.http.model.Method
+
+object SnsHandler extends ZIOAppDefault {
+
+  // Define a case class for SNS messages
+  case class SnsMessage(Type: String, SubscribeURL: Option[String], Message: Option[String])
+
+  // Define JSON decoders for SNS messages
+  implicit val snsMessageDecoder: JsonDecoder[SnsMessage] = DeriveJsonDecoder.gen[SnsMessage]
+
+  // Confirm the subscription by sending a GET request to the SubscribeURL
+  def confirmSubscription(subscribeUrl: String): ZIO[Any, Throwable, Unit] =
+    Client
+      .request(Request.get(URI.create(subscribeUrl)))
+      .flatMap { response =>
+        if (response.status.isSuccess) ZIO.logInfo("Subscription confirmed!")
+        else ZIO.fail(new RuntimeException(s"Failed to confirm subscription: ${response.status}"))
+      }
+
+  // ZIO HTTP App to handle SNS messages
+  val snsHandler: App[Any] = Http.collectZIO[Request] {
+    case req @ Method.POST -> !! / "sns-handler" =>
+      for {
+        body       <- req.body.asString
+        snsMessage <- ZIO.fromEither(body.fromJson[SnsMessage]).orElseFail(new RuntimeException("Invalid JSON"))
+        _ <- snsMessage.Type match {
+          case "SubscriptionConfirmation" =>
+            snsMessage.SubscribeURL match {
+              case Some(subscribeUrl) => confirmSubscription(subscribeUrl)
+              case None               => ZIO.fail(new RuntimeException("Missing SubscribeURL in SubscriptionConfirmation"))
+            }
+
+          case "Notification" =>
+            snsMessage.Message match {
+              case Some(message) => ZIO.logInfo(s"Received SNS notification: $message")
+              case None          => ZIO.fail(new RuntimeException("Missing Message in Notification"))
+            }
+
+          case _ =>
+            ZIO.fail(new RuntimeException(s"Unknown SNS message type: ${snsMessage.Type}"))
+        }
+      } yield Response.status(Status.Ok)
+  }
+
+  // Start the ZIO HTTP server
+  override def run: ZIO[Any with ZIOAppArgs with Scope, Throwable, Unit] =
+    Server
+      .serve(snsHandler)
+      .provide(Server.default, Client.default)
+}
+
+
+
+
+val unsubscribeOnShutdown: ZIO[Any, Throwable, Unit] = {
+  val subscriptionArn = "arn:aws:sns:us-east-1:123456789012:example-topic:subscription-id"
+  val snsClient = SnsClient.create()
+
+  ZIO.attempt {
+    snsClient.unsubscribe(UnsubscribeRequest.builder()
+      .subscriptionArn(subscriptionArn)
+      .build())
+  }.tapError(err => ZIO.logError(s"Failed to unsubscribe: ${err.getMessage}"))
+}
+
+
+// NOTE: SNS doesn't clean up dead subscribers!!!  You need to shut down gracefully.
+// If servers hard-crash then they will start spewing errors so something (or someone)
+// must monitor that and manually clean up dead SNS subscribers.

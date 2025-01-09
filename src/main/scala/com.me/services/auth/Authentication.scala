@@ -6,11 +6,13 @@ import java.time.Clock
 import scala.util.Try
 import zio.*
 import zio.http.*
+import zio.json.*
 import pdi.jwt.{Jwt, JwtAlgorithm, JwtClaim}
 import com.github.plokhotnyuk.jsoniter_scala.core._
 import com.github.plokhotnyuk.jsoniter_scala.macros._
 import java.time.Instant
 import com.typesafe.config.Config
+import java.util.Base64
 
 
 trait Authentication:
@@ -54,7 +56,10 @@ final case class LiveAuthentication(
   implicit val payloadCodec: JsonValueCodec[JwtPayload] = JsonCodecMaker.make
 
   def jwtEncode(username: String, key: String): String =
-    Jwt.encode(JwtClaim(subject = Some(username)).issuedNow.expiresIn( appConfig.getInt("app.auth.token_expiration_sec") ), key, JwtAlgorithm.HS512)
+    val claim = JwtClaim(subject = Some(username))
+      .issuedNow
+      .expiresIn( appConfig.getInt("app.auth.token_expiration_sec") )
+    Jwt.encode(claim, key, JwtAlgorithm.HS512)
 
   private def jwtDecode(token: String, key: String): Try[JwtClaim] =
     Jwt.decode(token, key, Seq(JwtAlgorithm.HS512))
@@ -108,7 +113,7 @@ final case class LiveAuthentication(
         }
 
     // Decode using the previous key
-    lazy val decodeWithPreviousKey: ZIO[Any, Response, (AuthToken, Session)] =
+    def decodeWithPreviousKey: ZIO[Any, Response, (AuthToken, Session)] =
       previousSecretKey match {
         case Some(key) if currentSecretKey.instantCreated.plusSeconds( appConfig.getInt("app.auth.old_token_grandfather_period_sec") ).isAfter(now) =>
           ZIO
@@ -127,8 +132,33 @@ final case class LiveAuthentication(
           ZIO.fail(Response.unauthorized("Invalid or expired token!"))
       }
 
-    // Try decoding with current key first, then fallback to previous key
-    decodeWithCurrentKey.orElse(decodeWithPreviousKey)
+    // Try decoding with the current key first, then fallback to previous key with retry logic
+    decodeWithCurrentKey.orElse(decodeWithPreviousKey).tapError{ error =>
+      // If decoding token was unsuccessful, test for the improbable (but possible) case where a server failed to get the 
+      // secret key rotation message and therefore does not have a key to decode the token. We want to log these events
+      // for visibility. If they are too frequent, we'll need to add logic here to re-acquire a fresh key in some window
+      // when we can't decode a token.
+
+      Try{
+        val parts = rawToken.split("\\.") 
+        if (parts.length == 3) 
+          val payloadBase64 = parts(1) // Decode the payload (second part)
+          val decodedPayload = new String(Base64.getUrlDecoder.decode(payloadBase64), "UTF-8")
+          decodedPayload.fromJson[TokenHeader] match {
+            case Right(tokenHeader) =>
+              val duration = java.time.Duration.between(Instant.ofEpochSecond(tokenHeader.iat), Instant.now())
+              val isWithinExpiry: Boolean = Math.abs(duration.getSeconds) <= appConfig.getInt("app.auth.token_expiration_sec")
+              if isWithinExpiry then
+                ZIO.logWarning("Attempted to decode token with current and previous keys, but both failed. Token is within token expiry window. Possible server didn't get rotate_key message.")
+              else
+                ZIO.none
+            case Left(_) => 
+              ZIO.logWarning("Bad token (can't parse header, iat), significant error or hacking attempt")
+          }
+        else 
+          ZIO.none // else we don't care--invalid token, no need log anything        
+      }.getOrElse(ZIO.none) // Do nothing further
+    }
   }
 
   val requestInterceptH: Handler[Any, Response, Request, (AuthToken, (Request, Session))] =

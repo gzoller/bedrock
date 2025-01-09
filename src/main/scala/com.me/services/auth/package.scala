@@ -4,6 +4,7 @@ package auth
 
 import java.time.Instant
 import zio.schema.{DeriveSchema, Schema}
+import zio.json.*
 
 case class BadCredentialError(message: String)
 case class GeneralFailure(message: String)
@@ -18,3 +19,7 @@ type AuthToken = Option[String]
 case class Session(userId: String)
 
 case class Key(version: String, value: String, instantCreated: Instant)
+
+case class TokenHeader(sub: String, iat: Long)
+object TokenHeader:
+  implicit val decoder: JsonDecoder[TokenHeader] = DeriveJsonDecoder.gen[TokenHeader]

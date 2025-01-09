@@ -4,19 +4,21 @@ import zio.*
 import zio.test.*
 import zio.test.Assertion.*
 import zio.http.*
-import zio.http.endpoint.*
 import services.endpoint.*
 import services.db.*
 import services.auth.*
 import com.typesafe.config.ConfigFactory
 import java.time.Instant
-import software.amazon.awssdk.regions.Region
+import pdi.jwt.{Jwt, JwtAlgorithm, JwtClaim}
+import java.time.Clock
 
 /**
   * This lovely thing runs the services' routes directly, without the drama
   * of an actual running server.
   */
 object BookServiceSpec extends ZIOSpecDefault {
+
+  implicit val clock: Clock = Clock.systemUTC
 
   val bookRepoMock: BookRepo = new BookRepo {
     override def find(query: String): List[Book] = 
@@ -25,10 +27,16 @@ object BookServiceSpec extends ZIOSpecDefault {
       else List.empty
   }
 
+  val mockSecretKeyManager = new SecretKeyManager {
+    override def getSecretKey: ZIO[Any, Throwable, (Key, Option[Key])] = 
+      ZIO.succeed((Key("bogus_version","secretKey",Instant.now()), None))
+  }
+
   val appConfig = ConfigFactory.load()
+
   val liveAuth = LiveAuthentication(
     appConfig, 
-    LiveSecretKeyManager(appConfig, Some(Region.US_EAST_1)), 
+    mockSecretKeyManager,
     Key("bogus_version","secretKey",Instant.now()), 
     None)
 
@@ -49,7 +57,8 @@ object BookServiceSpec extends ZIOSpecDefault {
       } yield assert(response.status)(equalTo(Status.Unauthorized))
     },
     test("Unauthorized access should fail (bad token)") {
-      val request = Request.get(URL.root / "hello").addHeader(Header.Authorization.Bearer("bogus_token"))
+      val bogus_token = Jwt.encode(JwtClaim(subject = Some("bogus_user")).issuedNow.expiresIn( 300 ), "bogus_key", JwtAlgorithm.HS512)
+      val request = Request.get(URL.root / "hello").addHeader(Header.Authorization.Bearer(bogus_token))
       val session = Session("bogus_user") // Create a bogus session
 
       for {
