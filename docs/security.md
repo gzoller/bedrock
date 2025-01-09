@@ -45,7 +45,7 @@ judgement.
 
 The diagram below shows how key rotation would work in AWS:
 
-![rotation_design](./REST Secret Key.png)
+![rotation_design](./REST_Secret_Key.png)
 
 >NOTE: All The AWS services, lambda functions, etc. must be configured by you in AWS. They are not automatically provided by the Bedrock framework, but are presumed to be present.
 
