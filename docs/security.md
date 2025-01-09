@@ -45,7 +45,7 @@ judgement.
 
 The diagram below shows how key rotation would work in AWS:
 
-![rotation_design](docs/img.jpg)
+![rotation_design](docs/REST Secret Key.png)
 
 >NOTE: All The AWS services, lambda functions, etc. must be configured by you in AWS. They are not automatically provided by the Bedrock framework, but are presumed to be present.
 
@@ -96,7 +96,7 @@ and has overhead, but is very secure, for example for a banking application.  Ot
 a reasonable window, say 2 minutes, for token rotation.  This does leave open some possibility users
 may be logged out/expired even though they were not inactive for 10 minutes.  No perfect answer
 here--pick your poison based on need.																																																								
-  
+
 ## Tips  
 
 Update secret key in Secrets Manager from command line:
