@@ -1,4 +1,4 @@
-package com.me
+package co.blocke.bedrock
 
 import zio.schema.{DeriveSchema, Schema}
 

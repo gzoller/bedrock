@@ -1,16 +1,18 @@
-package com.me
+package co.blocke.bedrock
 
 import zio.*
 import zio.test.*
 import zio.test.Assertion.*
 import zio.http.*
-import services.endpoint.*
 import services.db.*
 import services.auth.*
 import com.typesafe.config.ConfigFactory
 import java.time.Instant
 import pdi.jwt.{Jwt, JwtAlgorithm, JwtClaim}
 import java.time.Clock
+import services.auth.{Session, SecretKeyManager, LiveAuthentication, Key}
+import services.endpoint.LiveBookEndpoint
+import services.db.BookRepo
 
 /**
   * This lovely thing runs the services' routes directly, without the drama

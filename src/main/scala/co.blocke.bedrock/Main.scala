@@ -1,4 +1,4 @@
-package com.me
+package co.blocke.bedrock
 
 import services.* 
 import auth.*
@@ -12,7 +12,7 @@ import services.endpoint.BookEndpoint
 
 import zio.http.netty.*
 import zio.http.netty.client.NettyClientDriver
-import com.me.services.endpoint.AwsEventEndpoint
+import co.blocke.bedrock.services.endpoint.AwsEventEndpoint
 import com.typesafe.config.{Config, ConfigFactory}
 
 object Main extends ZIOAppDefault {
@@ -51,6 +51,7 @@ object Main extends ZIOAppDefault {
     type MyClient = ZClient[Any, Scope, Body, Throwable, Response]
 
     // Config layer
+    /*
     val configLayer: ULayer[Config] = ZLayer.succeed(ConfigFactory.load())
 
     // SecretKeyManager depends on Config and ZClient
@@ -62,7 +63,7 @@ object Main extends ZIOAppDefault {
       }      
 
     // Authentication depends on Config and SecretKeyManager
-    val authenticationLayer: ZLayer[Config & MyClient, Throwable, Authentication] =
+    val authenticationLayer: ZLayer[Config & Clock & MyClient, Throwable, Authentication] =
       (secretKeyManagerLayer >>> Authentication.live).catchAll { error =>
         ZLayer.fromZIO {
           ZIO.logErrorCause("Failed to initialize Authentication layer", Cause.fail(error)) *> ZIO.die(error)
@@ -70,7 +71,7 @@ object Main extends ZIOAppDefault {
       }
 
     // BookEndpoint depends on Authentication and BookRepo
-    val bookEndpointLayer: ZLayer[Config & MyClient, Nothing, BookEndpoint] =
+    val bookEndpointLayer: ZLayer[Config & Clock & MyClient, Nothing, BookEndpoint] =
       ((authenticationLayer ++ BookRepo.mock) >>> BookEndpoint.live).catchAll { error =>
         ZLayer.fromZIO {
           ZIO.logErrorCause("Failed to initialize BookEndpoint layer", Cause.fail(error)) *> ZIO.die(error)
@@ -78,18 +79,43 @@ object Main extends ZIOAppDefault {
       }
 
     // AWS Event Endpoint depends on Authentication
-    val awsEndpointLayer: ZLayer[Config & MyClient, Throwable, AwsEventEndpoint] =
+    val awsEndpointLayer: ZLayer[Config & Clock & MyClient, Throwable, AwsEventEndpoint] =
+      authenticationLayer >>> AwsEventEndpoint.live
+      */
+
+    val clockLayer: ZLayer[Any, Nothing, Clock] = ZLayer.succeed(Clock.ClockLive)
+
+    val configLayer: ULayer[Config] = ZLayer.succeed(ConfigFactory.load())
+
+    val secretKeyManagerLayer: ZLayer[Config & MyClient, Throwable, SecretKeyManager] =
+      (AwsEnvironment.live ++ configLayer ++ clientLayer >>> SecretKeyManager.live)
+
+    val authenticationLayer: ZLayer[Config & Clock & MyClient & SecretKeyManager, Throwable, Authentication] =
+      (configLayer ++ clientLayer ++ secretKeyManagerLayer >>> Authentication.live)
+
+    val awsEndpointLayer: ZLayer[Config & Clock & MyClient & SecretKeyManager, Throwable, AwsEventEndpoint] =
       authenticationLayer >>> AwsEventEndpoint.live
 
+    val bookEndpointLayer: ZLayer[Config & Clock & MyClient & SecretKeyManager, Throwable, BookEndpoint] =
+      (authenticationLayer ++ BookRepo.mock >>> BookEndpoint.live)
+
+    val appLayer: ZLayer[Any, Throwable, BookEndpoint & AwsEventEndpoint] =
+      configLayer ++ clientLayer ++ clockLayer >>> (
+        secretKeyManagerLayer >+> authenticationLayer >+> (bookEndpointLayer ++ awsEndpointLayer)
+      )
+
+    program.provide(appLayer ++ serverLayer).exitCode
+
     // Provide layers to the program
-    program.provide(
-      configLayer >+>                  // Provide Config
-      serverLayer >+>                  // Provide Server
-      clientLayer >+>                  // Provide ZClient
-      secretKeyManagerLayer >+>        // Provide SecretKeyManager
-      authenticationLayer >+>          // Provide Authentication
-      bookEndpointLayer >+>            // Provide BookEndpoint
-      awsEndpointLayer                // Provide AwsEventEndpoints
-    ).exitCode
+    // program.provide(
+    //   configLayer >+>                  // Provide Config
+    //   serverLayer >+>                  // Provide Server
+    //   clientLayer >+>                  // Provide ZClient
+    //   secretKeyManagerLayer >+>        // Provide SecretKeyManager
+    //   authenticationLayer >+>          // Provide Authentication
+    //   bookEndpointLayer >+>            // Provide BookEndpoint
+    //   awsEndpointLayer >+>             // Provide AwsEventEndpoints
+    //   clockLayer                       // Provide Clock
+    // ).exitCode
   }
 }

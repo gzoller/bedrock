@@ -1,4 +1,4 @@
-package com.me
+package co.blocke.bedrock
 package services
 package db
 
