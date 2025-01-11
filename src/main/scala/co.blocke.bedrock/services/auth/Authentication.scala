@@ -29,8 +29,6 @@ final case class LiveAuthentication(
   @volatile private var previousSecretKey: Option[Key]
 ) extends Authentication:
 
-  // implicit val javaClock: java.time.Clock = ClockConverter.fromZIOClock(clock)
-
   // Protected accessors for testing
   private[auth] def getCurrentSecretKey: Key = currentSecretKey
   private[auth] def getPreviousSecretKey: Option[Key] = previousSecretKey
@@ -61,32 +59,48 @@ final case class LiveAuthentication(
 
   def jwtEncode(username: String, key: String): UIO[String] =
     for {
-      _ <- ZIO.succeed(println(">>> Encoding token with key "+key))
       now <- clock.instant.map(_.getEpochSecond) // Dynamically fetch the current time
-      _ <- ZIO.succeed( println(">>> Encoded at "+now))
       claim = JwtClaim(subject = Some(username))
         .issuedAt(now)
         .expiresIn(appConfig.getInt("app.auth.token_expiration_sec"))(
           using ClockConverter.dynamicJavaClock(clock) // Use dynamic Clock here
         )
-      _ <- ZIO.succeed(println(">>> Claim: "+claim + " (expires at "+Instant.ofEpochSecond(claim.expiration.get)+")"))
     } yield Jwt.encode(claim, key, JwtAlgorithm.HS512)
 
-  private def jwtDecode(token: String, key: String): Try[JwtClaim] =
-    println("<<< Attempt to decode with key "+key)    
-    Jwt(ClockConverter.dynamicJavaClock(clock)).decode(token, key, Seq(JwtAlgorithm.HS512))
-
-  //---------
-  private def decodeHeader(t:String) =
-    val parts = t.split("\\.") 
-    if (parts.length == 3) 
-      val payloadBase64 = parts(1) // Decode the payload (second part)
-      val decodedPayload = new String(Base64.getUrlDecoder.decode(payloadBase64), "UTF-8")
-      decodedPayload.fromJson[TokenHeader] match {
-        case Right(tokenHeader) => println("=== Header: "+tokenHeader + " (created at "+Instant.ofEpochSecond(tokenHeader.iat)+")")
-        case _ => println("Can't decode header")
+  // JWT decoding has an unfortunate inconsistency in the library used. If the encoded subject has a '_' in 
+  // it, it is decoded as a JSON object in Content otherwise it is decoded as a simple string in Subject. 
+  // This is a workaround to extract the subject from the payload.
+  private def jwtDecode(token: String, key: String): Try[JwtClaim] = {
+    Jwt(ClockConverter.dynamicJavaClock(clock))
+      .decode(token, key, Seq(JwtAlgorithm.HS512))
+      .map { (claim: JwtClaim) =>
+        // Check if "sub" exists in the content and extract it if needed
+        val fixedSubject = claim.subject.orElse(extractSubjectFromPayload(claim))
+        // Return a normalized claim with "sub" mapped to subject and empty content
+        new JwtClaim(
+          content = if (fixedSubject.isDefined) "{}" else claim.content,
+          issuer = claim.issuer,
+          subject = fixedSubject,
+          audience = claim.audience,
+          expiration = claim.expiration,
+          notBefore = claim.notBefore,
+          issuedAt = claim.issuedAt,
+          jwtId = claim.jwtId
+        )
       }
+  }
 
+  // Upon decoding, the subject (containing user id) is oddly stuffed into the payload as JSON
+  // We must pull this out
+  private def extractSubjectFromPayload(claim: JwtClaim): Option[String] = {
+    try {
+      // Deserialize the content field into JwtPayload
+      val payload = readFromString[JwtPayload](claim.content)
+      payload.sub
+    } catch {
+      case _: Throwable => None
+    }
+  }
 
   // Logic to attempt to decode given token with current key, and failing that try
   // using the previous key if current key was recently created (within last 5 min).
@@ -95,21 +109,13 @@ final case class LiveAuthentication(
   private[auth] def decodeToken(rawToken: String): ZIO[Any, Response, (AuthToken, Session)] = {
     // Decode using the current key
     val decodeWithCurrentKey: ZIO[Any, Response, (AuthToken, Session)] = {
-      println("Trying current key "+currentSecretKey.value)
       for {
         now <- clock.instant.map(_.getEpochSecond())
         claim <- ZIO.fromTry(jwtDecode(rawToken, currentSecretKey.value))
-                  .mapError{e => 
-                    println("Greg Zoller")
-                    println("+++Now: "+Instant.ofEpochSecond(now))
-                    decodeHeader(rawToken)
-                    println("Oops! Decode failed: "+e)
-                    Response.unauthorized("Invalid or expired token!")
-                  } // Map Throwable to Response
+                  .mapError{_ => Response.unauthorized("Invalid or expired token!") } // Map Throwable to Response
         result <- claim.subject match {
             // extractSubjectFromPayload(claim) match {
               case Some(subject) =>
-                println("Ok... we have subject: "+subject)
                 // Before we say we're ok, let's check the time-to-live of the token. If its inside
                 // the window we'll go ahead and generate a new token and return it. (token rotation)
                 claim.expiration match {
@@ -137,11 +143,8 @@ final case class LiveAuthentication(
 
     // Decode using the previous key
     def decodeWithPreviousKey: ZIO[Any, Response, (AuthToken, Session)] =
-      println("Trying previous key")
-      println("Created: "+currentSecretKey.instantCreated)
       for {
         now <- clock.instant
-        _ <- ZIO.succeed( println(">>> Decode w/Previous at "+now))
         result <- previousSecretKey match {
           case Some(key) if currentSecretKey.instantCreated.plusSeconds( appConfig.getInt("app.auth.old_token_grandfather_period_sec") ).isAfter(now) =>
             ZIO
@@ -231,12 +234,12 @@ final case class LiveAuthentication(
 
 
 object Authentication:
-  def live: ZLayer[Config & Clock & SecretKeyManager, Throwable, Authentication] =
+  def live: ZLayer[Config & SecretKeyManager, Throwable, Authentication] =
     ZLayer.fromZIO {
       for {
         manager         <- ZIO.service[SecretKeyManager]
         appConfig       <- ZIO.service[Config]
-        clock           <- ZIO.service[zio.Clock]
+        clock           <- ZIO.clock
         (currentKey, previousKey) <- manager.getSecretKey
       } yield LiveAuthentication(appConfig, clock, manager, currentKey, previousKey)
     }

@@ -50,39 +50,6 @@ object Main extends ZIOAppDefault {
 
     type MyClient = ZClient[Any, Scope, Body, Throwable, Response]
 
-    // Config layer
-    /*
-    val configLayer: ULayer[Config] = ZLayer.succeed(ConfigFactory.load())
-
-    // SecretKeyManager depends on Config and ZClient
-    val secretKeyManagerLayer: ZLayer[Config & MyClient, Throwable, SecretKeyManager] =
-      (AwsEnvironment.live ++ clientLayer >>> SecretKeyManager.live).catchAll { error =>
-        ZLayer.fromZIO {
-          ZIO.logErrorCause("Failed to initialize SecretKeyManager layer", Cause.fail(error)) *> ZIO.die(error)
-        }
-      }      
-
-    // Authentication depends on Config and SecretKeyManager
-    val authenticationLayer: ZLayer[Config & Clock & MyClient, Throwable, Authentication] =
-      (secretKeyManagerLayer >>> Authentication.live).catchAll { error =>
-        ZLayer.fromZIO {
-          ZIO.logErrorCause("Failed to initialize Authentication layer", Cause.fail(error)) *> ZIO.die(error)
-        }
-      }
-
-    // BookEndpoint depends on Authentication and BookRepo
-    val bookEndpointLayer: ZLayer[Config & Clock & MyClient, Nothing, BookEndpoint] =
-      ((authenticationLayer ++ BookRepo.mock) >>> BookEndpoint.live).catchAll { error =>
-        ZLayer.fromZIO {
-          ZIO.logErrorCause("Failed to initialize BookEndpoint layer", Cause.fail(error)) *> ZIO.die(error)
-        }
-      }
-
-    // AWS Event Endpoint depends on Authentication
-    val awsEndpointLayer: ZLayer[Config & Clock & MyClient, Throwable, AwsEventEndpoint] =
-      authenticationLayer >>> AwsEventEndpoint.live
-      */
-
     val clockLayer: ZLayer[Any, Nothing, Clock] = ZLayer.succeed(Clock.ClockLive)
 
     val configLayer: ULayer[Config] = ZLayer.succeed(ConfigFactory.load())
@@ -90,32 +57,21 @@ object Main extends ZIOAppDefault {
     val secretKeyManagerLayer: ZLayer[Config & MyClient, Throwable, SecretKeyManager] =
       (AwsEnvironment.live ++ configLayer ++ clientLayer >>> SecretKeyManager.live)
 
-    val authenticationLayer: ZLayer[Config & Clock & MyClient & SecretKeyManager, Throwable, Authentication] =
+    val authenticationLayer: ZLayer[Config & MyClient & SecretKeyManager, Throwable, Authentication] =
       (configLayer ++ clientLayer ++ secretKeyManagerLayer >>> Authentication.live)
 
-    val awsEndpointLayer: ZLayer[Config & Clock & MyClient & SecretKeyManager, Throwable, AwsEventEndpoint] =
+    val awsEndpointLayer: ZLayer[Config & MyClient & SecretKeyManager, Throwable, AwsEventEndpoint] =
       authenticationLayer >>> AwsEventEndpoint.live
 
-    val bookEndpointLayer: ZLayer[Config & Clock & MyClient & SecretKeyManager, Throwable, BookEndpoint] =
+    val bookEndpointLayer: ZLayer[Config & MyClient & SecretKeyManager, Throwable, BookEndpoint] =
       (authenticationLayer ++ BookRepo.mock >>> BookEndpoint.live)
 
     val appLayer: ZLayer[Any, Throwable, BookEndpoint & AwsEventEndpoint] =
-      configLayer ++ clientLayer ++ clockLayer >>> (
+      configLayer ++ clientLayer >>> (
         secretKeyManagerLayer >+> authenticationLayer >+> (bookEndpointLayer ++ awsEndpointLayer)
       )
 
     program.provide(appLayer ++ serverLayer).exitCode
 
-    // Provide layers to the program
-    // program.provide(
-    //   configLayer >+>                  // Provide Config
-    //   serverLayer >+>                  // Provide Server
-    //   clientLayer >+>                  // Provide ZClient
-    //   secretKeyManagerLayer >+>        // Provide SecretKeyManager
-    //   authenticationLayer >+>          // Provide Authentication
-    //   bookEndpointLayer >+>            // Provide BookEndpoint
-    //   awsEndpointLayer >+>             // Provide AwsEventEndpoints
-    //   clockLayer                       // Provide Clock
-    // ).exitCode
   }
 }
