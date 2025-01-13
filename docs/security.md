@@ -39,7 +39,8 @@ in Secrets Manager across all our clustered REST servers. The mechanism provided
 is described below.
 
 ## Secret Key Rotation
-Secret Keys, like Bearer Tokens, should be rotated on some regular cadence. AWS Secrets Manager provides a built-in facility for auto-rotation with configurable cadence. For a secure environment some guidelines suggest rotating keys 
+Secret Keys, like Bearer Tokens, should be rotated on some regular cadence. AWS Secrets Manager provides a built-in 
+facility for auto-rotation with configurable cadence. For a secure environment some guidelines suggest rotating keys 
 every 30-90 days. Your environment may have regulations that stipulate the frequency, otherwise use your own
 judgement.
 
@@ -60,18 +61,30 @@ reload the current and previous secret keys from AWS Secrets Manager..
 >NOTE: The /rotate-secret endpoint is "open", ie not protected by auth token. You will need to configure
 >AWS to protect that endpoint to only allow access from SNS.
 
-There's a big "but..." here. Communication of the new key to all the clustered instances is not instantaneous!
-It is possible/likely that you may receive REST calls with tokens created using the new key being sent to 
-another server that has not yet updated and is still using the old Secret Key. During this window, during which
-all servers are being notified and are updating their keys, both old and new Secret Keys are technically valid.
-What do we do then? We may also see servers that have been updated to the new key receive
-REST calls using the now-old key, which technically is still valid. How do we handle that?
+There's a big "but..." here. Communication of the new key to all the clustered instances is not instantaneous.  There 
+are two cases we must consider and develop strategies to handle during the window of time allowed for all servers
+to receive the /rotate-secret message and we have a mix of old/new secrets out there:
 
-Remember that Secrets Manager versions key values? The answer to both of these cases is that the Bedrock 
-servers request two keys: the current one and the previous one. That way if we use the new key to try to 
-decode a token that was encoded using the old key we can fall back to try using the previous key, which should
-work. We can maintain a timestamp in the key as well so we can invalidate the previous key after a certain
-amount of time has passed.
+1. Server has updated their Secret Key but receives a valid and non-expired token generated with the old Secret Key
+In this case we track the previous Secret Key and try to decode with it--but only during the "grandfather" window,
+set in application.conf: old_token_grandfather_period_sec. During this window the server will accept a valid
+and non-expired "old" token. A new token will be generated with the new Secret Key and returned in the
+Authorization header of the Response. (The client is responsible to track the changed token and use it in
+following REST calls.)
+
+2. Server has not received, or missed, the /rotate-secret message, and receives a token using the new Secret Key 
+In this case the Server does nothing but log the occurrence and return Unauthorized. Why? Because neither the
+current nor previous Secret Keys will work. Trying to guess whether to update the keys is likewise a losing game
+because the Server has no way to know whether this presented token is valid-but-new, or expired, or invalid.
+
+For case 2, we have a problem.  The strategy here doesn't not really address the problem. The solution needs
+to happen in the cloud, in AWS. We will need a custodian lambda function that triggers on a cadence, say 3
+or 4 times a day, and gets a list of all running server instances and diff's it with a list of all SNS-subscribed
+servers on the key rotation notification topic.  Any servers not subscribed to SNS should be terminated;
+Kubernetes will restart them if needed. Any servers in the SNS subscription list which are not running should
+be un-subscribed by the lamda function. This dual-diff strategy should maintain reasonable cleanliness of the
+subscription stack. Further we can link an alert trigger to the logs when we get a message saying that a server
+may have missed the notification. Case 2 should by far be the more improbable of the two.
 
 ## Bearer Token Rotation
 Bearer Token rotation (regeneration) is required on all REST endpoints for security. The login process
@@ -95,7 +108,7 @@ the regen threshold equal to the timeout ensuring token rotation upon every call
 and has overhead, but is very secure, for example for a banking application.  Otherwise you could set
 a reasonable window, say 2 minutes, for token rotation.  This does leave open some possibility users
 may be logged out/expired even though they were not inactive for 10 minutes.  No perfect answer
-here--pick your poison based on need.																																																								
+here--pick your poison based on need.	
 
 ## Tips  
 

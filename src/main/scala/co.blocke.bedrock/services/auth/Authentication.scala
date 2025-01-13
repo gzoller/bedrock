@@ -10,19 +10,18 @@ import pdi.jwt.{Jwt, JwtAlgorithm, JwtClaim}
 import com.github.plokhotnyuk.jsoniter_scala.core._
 import com.github.plokhotnyuk.jsoniter_scala.macros._
 import java.time.Instant
-import com.typesafe.config.Config
 import java.util.Base64
 
 
 trait Authentication:
   def login(username: String, password: String): ZIO[Any, Either[GeneralFailure, BadCredentialError], String] // returns a token
-  def jwtEncode(username: String, key: String): UIO[String]
+  def jwtEncode(username: String, key: String): ZIO[Any, Throwable, String]
   def updateKeys: ZIO[Any, Throwable, Unit]
   def bearerAuthWithContext: HandlerAspect[Any, Session]
 
 
 final case class LiveAuthentication(
-  appConfig: Config,
+  authConfig: AuthConfig,
   clock: zio.Clock,
   secretKeyManager: SecretKeyManager,
   @volatile private var currentSecretKey: Key,
@@ -50,22 +49,28 @@ final case class LiveAuthentication(
   //  2. bad creds  -- Return a Right[BadCredentialError]
   //  3. anything else at all -- Return a Left[GeneralFailure] (log the real error of course, but just return GeneralFailure)
   def login(username: String, password: String): ZIO[Any, Either[GeneralFailure, BadCredentialError], String] =
-    // ZIO.fail(Left(GeneralFailure("boom")))
     jwtEncode(username, currentSecretKey.value)
+      .mapError { throwable =>
+        val errorMessage = s"Failed to generate JWT for user $username: ${throwable.getMessage}"
+        GeneralFailure(errorMessage)
+      }
+      .tapError(error => ZIO.logError(error.message))
+      .mapError(Left(_)) // Wrap the error as a `Left` to match the return type    
 
   // Define a case class to parse the payload
   case class JwtPayload(sub: Option[String])
   implicit val payloadCodec: JsonValueCodec[JwtPayload] = JsonCodecMaker.make
 
-  def jwtEncode(username: String, key: String): UIO[String] =
+  def jwtEncode(username: String, key: String): ZIO[Any, Throwable, String] =
     for {
       now <- clock.instant.map(_.getEpochSecond) // Dynamically fetch the current time
       claim = JwtClaim(subject = Some(username))
         .issuedAt(now)
-        .expiresIn(appConfig.getInt("app.auth.token_expiration_sec"))(
+        .expiresIn(authConfig.tokenExpirationSec)(
           using ClockConverter.dynamicJavaClock(clock) // Use dynamic Clock here
         )
-    } yield Jwt.encode(claim, key, JwtAlgorithm.HS512)
+      token <- ZIO.attempt(Jwt.encode(claim, key, JwtAlgorithm.HS512))
+    } yield token    
 
   // JWT decoding has an unfortunate inconsistency in the library used. If the encoded subject has a '_' in 
   // it, it is decoded as a JSON object in Content otherwise it is decoded as a simple string in Subject. 
@@ -122,9 +127,11 @@ final case class LiveAuthentication(
                   case Some(expirationTime) =>
                     for {
                       result <- {
-                        if (expirationTime - now <= appConfig.getInt("app.auth.token_rotation_sec")) {
+                        if (expirationTime - now <= authConfig.tokenRotationSec) {
                           // Soon... rotate token with current key
                           jwtEncode(subject, currentSecretKey.value).map(token => (Some(token), Session(subject)))
+                            .tapError(error => ZIO.logError(error.getMessage))
+                            .mapError( e => Response.unauthorized("Failed to generate new token"))
                         } else
                           // Not so soon... no need to re-gen token
                           ZIO.succeed( (None, Session(subject)) )
@@ -134,6 +141,8 @@ final case class LiveAuthentication(
                     // Sticky... we've successfully decoded the token but it has no expiration time, which is
                     // invalid, so go ahead and re-gen a new one.
                     jwtEncode(subject, currentSecretKey.value).map(token => (Some(token), Session(subject)))
+                      .tapError(error => ZIO.logError(error.getMessage))
+                      .mapError( e => Response.unauthorized("Failed to generate new token"))
                 }
               case None =>
                 ZIO.fail(Response.badRequest("Missing subject claim!"))
@@ -145,15 +154,21 @@ final case class LiveAuthentication(
     def decodeWithPreviousKey: ZIO[Any, Response, (AuthToken, Session)] =
       for {
         now <- clock.instant
+        grandfatherPeriod <- ZIO
+            .fromOption(Option(authConfig.oldTokenGrandfatherPeriodSec))
+            .orElseFail(Response.internalServerError("Missing configuration for old token grandfather period"))
         result <- previousSecretKey match {
-          case Some(key) if currentSecretKey.instantCreated.plusSeconds( appConfig.getInt("app.auth.old_token_grandfather_period_sec") ).isAfter(now) =>
+          case Some(key) if currentSecretKey.instantCreated.plusSeconds(grandfatherPeriod).isAfter(now) =>
             ZIO
               .fromTry(jwtDecode(rawToken, key.value))
               .mapError(_ => Response.unauthorized("Invalid or expired token!")) // Convert Throwable to Response
-              .flatMap { _.subject match {
+              .flatMap { decodedToken =>
+                decodedToken.subject match {
                   case Some(subject) =>
-                    val newToken = jwtEncode(subject, currentSecretKey.value) // Regenerate token
-                    newToken.map(token => (Some(token), Session(subject)))
+                    jwtEncode(subject, currentSecretKey.value)
+                      .map(newToken => (Some(newToken), Session(subject))) // Regenerate token
+                      .tapError(error => ZIO.logError(error.getMessage))
+                      .mapError(_ => Response.internalServerError("Failed to generate new token"))
                   case None =>
                     ZIO.fail(Response.badRequest("Missing subject claim!"))
                 }
@@ -179,9 +194,12 @@ final case class LiveAuthentication(
             case Right(tokenHeader) =>
               for {
                 now <- clock.instant
+                grandfatherPeriod <- ZIO
+                  .fromOption(Option(authConfig.oldTokenGrandfatherPeriodSec))
+                  .orElseFail(Response.internalServerError("Missing configuration for old token grandfather period"))
                 result <- {
                   val duration = java.time.Duration.between(Instant.ofEpochSecond(tokenHeader.iat), now)
-                  val isWithinExpiry: Boolean = Math.abs(duration.getSeconds) <= appConfig.getInt("app.auth.token_expiration_sec")
+                  val isWithinExpiry: Boolean = Math.abs(duration.getSeconds) <= grandfatherPeriod
                   if isWithinExpiry then
                     ZIO.logWarning("Attempted to decode token with current and previous keys, but both failed. Token is within token expiry window. Possible server didn't get rotate_key message.")
                   else
@@ -234,12 +252,12 @@ final case class LiveAuthentication(
 
 
 object Authentication:
-  def live: ZLayer[Config & SecretKeyManager, Throwable, Authentication] =
+  def live: ZLayer[AuthConfig & SecretKeyManager, Throwable, Authentication] =
     ZLayer.fromZIO {
       for {
         manager         <- ZIO.service[SecretKeyManager]
-        appConfig       <- ZIO.service[Config]
+        authConfig      <- ZIO.service[AuthConfig]
         clock           <- ZIO.clock
         (currentKey, previousKey) <- manager.getSecretKey
-      } yield LiveAuthentication(appConfig, clock, manager, currentKey, previousKey)
+      } yield LiveAuthentication(authConfig, clock, manager, currentKey, previousKey)
     }

@@ -11,10 +11,10 @@ lazy val root = project
 
     scalaVersion := scala3Version,
 
-    Compile / mainClass := Some("com.me.Main"),
+    Compile / mainClass := Some("co.blocke.bedrock.Main"),
 
     buildInfoKeys := Seq("isProd" -> sys.props.getOrElse("prod","false").toBoolean),
-    buildInfoPackage := "com.me",
+    buildInfoPackage := "co.blocke.bedrock",
     buildInfoObject := "MyBuildInfo",
     // Global / excludeLintKeys += buildInfoKeys, // Suppress annoying lint message about unused keys
     // Global / excludeLintKeys += buildInfoPackage, 
@@ -41,6 +41,10 @@ lazy val root = project
       "dev.zio" %% "zio-http" % "0.0.0+1826-1f8ef1ff+20241212-0015-SNAPSHOT", //"3.0.1",
       // "dev.zio" %% "zio-http-cli" % "3.0.1", // If you want a runnable CLI
       "dev.zio" %% "zio-logging" % "2.4.0",
+      "dev.zio" %% "zio-config" % "4.0.3",
+      "dev.zio" %% "zio-config-magnolia" % "4.0.3",  // For automatic derivation of ConfigDescriptor
+      "dev.zio" %% "zio-config-typesafe" % "4.0.3",  // For HOCON (Typesafe Config) support
+
 
       // ---- AWS
       "software.amazon.awssdk" % "core" % "2.20.0",            // AWS SDK Core
@@ -53,7 +57,7 @@ lazy val root = project
       "com.github.jwt-scala" %% "jwt-core" % "10.0.1",
       "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-core" % "2.20.3",
       "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-macros" % "2.20.3" % "provided",
-      "com.typesafe" % "config" % "1.4.3",
+      // "com.typesafe" % "config" % "1.4.3",
 
       // ---- Testing
       "org.scalameta" %% "munit" % "1.0.0" % Test,

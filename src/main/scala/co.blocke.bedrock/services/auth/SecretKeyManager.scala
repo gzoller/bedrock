@@ -11,8 +11,6 @@ import software.amazon.awssdk.services.secretsmanager.SecretsManagerClient
 import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.secretsmanager.model.{GetSecretValueRequest, GetSecretValueResponse, ListSecretVersionIdsRequest}
 import scala.jdk.CollectionConverters.*
-import com.typesafe.config.Config
-
 
 /**
   * Get a secret from AWS Secrets Manager
@@ -21,17 +19,18 @@ trait SecretKeyManager:
   def getSecretKey: ZIO[Any, Throwable, (Key, Option[Key])]
 
 
-final case class LiveSecretKeyManager(appConfig: Config, awsRegion: Option[Region]) extends SecretKeyManager:
+final case class LiveSecretKeyManager(authConfig: AuthConfig, awsRegion: Option[Region]) extends SecretKeyManager:
 
   def getSecretKey: ZIO[Any, Throwable, (Key,Option[Key])] = 
     for {
-      outcome <- ZIO.attemptBlocking {
-          val secretName = appConfig.getString("app.auth.secret_name")
+      localstackUri <- ZIO
+        .attempt(new java.net.URI(authConfig.localstackUrl))
 
+      outcome <- ZIO.attemptBlocking {
           val (endpointOverride, credentialsProvider) = if !awsRegion.isDefined then 
               // LocalStack configuration if no actual AWS is found
               (
-                Some(new java.net.URI(appConfig.getString("app.auth.localstack_url"))), // LocalStack endpoint
+                Some(localstackUri), // LocalStack endpoint
                 StaticCredentialsProvider.create(AwsBasicCredentials.create("foo", "bar")) // Mock credentials
               )
             else
@@ -46,7 +45,7 @@ final case class LiveSecretKeyManager(appConfig: Config, awsRegion: Option[Regio
           
           try {
             val versionsRequest = ListSecretVersionIdsRequest.builder()
-              .secretId(secretName)
+              .secretId(authConfig.secretName)
               .build()
             val versionsResponse = secretsClient.listSecretVersionIds(versionsRequest)
             val currentVersion = versionsResponse.versions.asScala.find(_.versionStages.contains("AWSCURRENT")).map(_.versionId)
@@ -57,7 +56,7 @@ final case class LiveSecretKeyManager(appConfig: Config, awsRegion: Option[Regio
             // Create a request to retrieve the current secret
             val currentSecret = {
               val getSecretValueRequest = GetSecretValueRequest.builder()
-                .secretId(secretName)
+                .secretId(authConfig.secretName)
                 .versionId(currentVersion)
                 .build()
 
@@ -71,7 +70,7 @@ final case class LiveSecretKeyManager(appConfig: Config, awsRegion: Option[Regio
             // Create a request to retrieve the current secret
             val previousSecret = previousVersion.map{ prevVer => 
               val getSecretValueRequest = GetSecretValueRequest.builder()
-                .secretId(secretName)
+                .secretId(authConfig.secretName)
                 .versionId(prevVer)
                 .build()
 
@@ -90,12 +89,13 @@ final case class LiveSecretKeyManager(appConfig: Config, awsRegion: Option[Regio
       _ <- ZIO.logInfo("Loaded secret keys")
     } yield (outcome)
 
+
 object SecretKeyManager:
-  def live: ZLayer[Config & AwsEnvironment & ZClient[Any, Scope, Body, Throwable, Response], Throwable, SecretKeyManager] =
+  def live: ZLayer[AuthConfig & Client & AwsEnvironment, Throwable, SecretKeyManager] =
     ZLayer.fromZIO {
       for {
-        appConfig <- ZIO.service[Config]
+        authConfig <- ZIO.service[AuthConfig]
         awsEnv <- ZIO.service[AwsEnvironment]
         region <- awsEnv.getRegion
-      } yield LiveSecretKeyManager(appConfig, region)
+      } yield LiveSecretKeyManager(authConfig, region)
     }

@@ -89,7 +89,7 @@ final case class LiveBookEndpoint( auth: Authentication, bookRepo: BookRepo ) ex
   // --------- Swagger, if non-prod
   //===============================================================
   val swaggerRoutes = 
-    if com.me.MyBuildInfo.isProd then
+    if co.blocke.bedrock.MyBuildInfo.isProd then
       Routes.empty // disable Swagger for prod deployment
     else
       val openAPIFirst = OpenAPIGen.fromEndpoints(title = "Library API", version = "1.0", book_endpoint, hello_endpoint, login_endpoint)

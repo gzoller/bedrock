@@ -27,8 +27,6 @@ object AuthServiceSpec extends ZIOSpecDefault {
       else List.empty
   }
 
-  // TODO: Make this respect the TestClock, not Instant.now()
-
   // This mock SecretKeyManager rotates the keys upon every request
   case class MockSecretKeyManager(clock: zio.Clock) extends SecretKeyManager {
     private var version: Int = 1
@@ -73,7 +71,7 @@ object AuthServiceSpec extends ZIOSpecDefault {
 
   // Compose the final layer
   val finalLayer = 
-    configLayer ++ secretKeyManagerLayer ++ configLayer >>> authenticationLayer
+    configLayer ++ secretKeyManagerLayer ++ configLayer >>> authenticationLayer ++ secretKeyManagerLayer
 
   def spec = suite("AuthServiceSpec")(
     test("Simple token encoding and decoding should work (w/o rotation)") {
@@ -130,6 +128,20 @@ object AuthServiceSpec extends ZIOSpecDefault {
         _        <- auth.updateKeys
         _        <- TestClock.adjust(185.seconds)
         result   <- auth.asInstanceOf[LiveAuthentication].decodeToken(oldToken).either
+      } yield result match {
+        case Left(response) =>
+          assert(response.status)(equalTo(Status.Unauthorized)) // Assert the error Response
+        case Right(_) =>
+          assert(false)(equalTo(true)) // Fail the test if no error occurs
+      }
+    },
+    test("After Secret Key rotation, a server may have missed the rotate-secret message and not have any current token") {
+      for {
+        auth     <- ZIO.service[Authentication]
+        keyMgr   <- ZIO.service[SecretKeyManager]
+        keys     <- keyMgr.getSecretKey  // rotate the keys but don't tell Authentication with auth.updateKeys
+        newToken <- auth.jwtEncode("TestUser", keys._1.value)
+        result   <- auth.asInstanceOf[LiveAuthentication].decodeToken(newToken).either
       } yield result match {
         case Left(response) =>
           assert(response.status)(equalTo(Status.Unauthorized)) // Assert the error Response
