@@ -9,12 +9,12 @@ import zio.http.URL
 
 case class AuthConfig(
     tokenExpirationSec: Int,
-    tokenRotationSec: Int,
-    oldTokenGrandfatherPeriodSec: Int,
+    refreshWindowSec: Int,
+    sessionDurationSec: Int,
     secretName: String,
-    localstackUrl: String  // this is a string b/c ultimately its parsed into a URI
+    sessionSecretName: String,
+    localstackUrl: Option[String]  // this is a string b/c ultimately its parsed into a URI
 )
-
 
 case class AWSConfig(
     snsTopicArn: String,

@@ -57,7 +57,6 @@ lazy val root = project
       "com.github.jwt-scala" %% "jwt-core" % "10.0.1",
       "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-core" % "2.20.3",
       "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-macros" % "2.20.3" % "provided",
-      // "com.typesafe" % "config" % "1.4.3",
 
       // ---- Testing
       "org.scalameta" %% "munit" % "1.0.0" % Test,

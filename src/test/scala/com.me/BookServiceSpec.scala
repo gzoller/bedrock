@@ -1,12 +1,12 @@
 package co.blocke.bedrock
 
 import zio.*
+import zio.json.*
 import zio.test.*
 import zio.test.Assertion.*
 import zio.http.*
 import services.db.*
 import services.auth.*
-import com.typesafe.config.{Config, ConfigFactory}
 import pdi.jwt.{Jwt, JwtAlgorithm, JwtClaim}
 import services.auth.{Session, SecretKeyManager, LiveAuthentication, Key}
 import services.endpoint.LiveBookEndpoint
@@ -18,10 +18,10 @@ import services.db.BookRepo
   */
 object BookServiceSpec extends ZIOSpecDefault {
 
-  // implicit val clock: Clock = Clock.systemUTC
-
-  val configLayer: ULayer[Config] =
-    ZLayer.succeed(ConfigFactory.load()) // Provide Config independently
+  def keyBundle(now: java.time.Instant) = KeyBundle( 
+          Key("bogus_version","secretKey",now), 
+          None, 
+          Key("bogus_version","theWayIsShut",now) )
 
   val secretKeyManagerLayer: ZLayer[Any, Nothing, SecretKeyManager] =
     ZLayer.fromZIO {
@@ -29,20 +29,26 @@ object BookServiceSpec extends ZIOSpecDefault {
         clock <- ZIO.clock // Only depends on Clock
         now <- clock.instant
       } yield new SecretKeyManager {
-        override def getSecretKey: ZIO[Any, Throwable, (Key, Option[Key])] = 
-          ZIO.succeed((Key("bogus_version","secretKey",now), None))
+        override def getSecretKey: ZIO[Any, Throwable, KeyBundle] = 
+          ZIO.succeed(keyBundle(now))
       }
     }
 
-  val authenticationLayer: ZLayer[Config & SecretKeyManager, Throwable, Authentication] =
+  val authenticationLayer: ZLayer[AuthConfig & SecretKeyManager, Throwable, Authentication] =
     ZLayer.fromZIO {
       for {
-        config <- ZIO.service[Config] // Depends on Config
+        config <- ZIO.service[AuthConfig] // Depends on Config
         manager <- ZIO.service[SecretKeyManager] // Depends on SecretKeyManager
         clock <- ZIO.clock // Depends on Clock
         now <- clock.instant
-      } yield new LiveAuthentication(config, clock, manager, Key("bogus_version","secretKey",now), None)
+      } yield new LiveAuthentication(
+        config, 
+        clock, 
+        manager, 
+        keyBundle(now)
+        )
     }
+
 
   val bookServiceLayer = ZLayer.succeed(
     new BookRepo {
@@ -63,7 +69,7 @@ object BookServiceSpec extends ZIOSpecDefault {
 
   // Compose only the layers needed for Authentication
   val authDependencies =
-    configLayer ++ secretKeyManagerLayer
+    AppConfig.live ++ secretKeyManagerLayer
 
   val authenticationAndRepo =
     authDependencies >>> authenticationLayer ++ bookServiceLayer
@@ -71,7 +77,7 @@ object BookServiceSpec extends ZIOSpecDefault {
   val allLayers =
     authenticationAndRepo >>> bookLayer
 
-  var authToken: String = ""
+  var tokens: TokenBundle = TokenBundle("","")
 
   def spec = suite("BookServiceSpec")(
     test("Unauthorized access should fail (no token)") {
@@ -103,17 +109,20 @@ object BookServiceSpec extends ZIOSpecDefault {
     test("Login should work and return a token") {
       val request = Request.get(URL.root / "login")
       val result = for {
+        clock       <- ZIO.clock
         bookService <- ZIO.service[LiveBookEndpoint]
         response    <- bookService.loginRoute.run(request)
-        body        <- response.body.asString
-      } yield (body, assert(response.status)(equalTo(Status.Ok)) && assert(body.length)(isGreaterThan(0)))
+        bodyString  <- response.body.asString
+        body        <- ZIO.fromEither(bodyString.fromJson[TokenBundle])
+                      .mapError(err => new Exception(s"Failed to parse TokenBundle: $err"))
+      } yield (body, assert(response.status)(equalTo(Status.Ok)))
       result.flatMap{ (a,b) => 
-        authToken = a  // save the token for later tests
+        tokens = a  // save the token for later tests
         b
         }
     },
     test("authenticated request should return a hello message") {
-      val request = Request.get(URL.root / "hello").addHeader(Header.Authorization.Bearer(authToken))
+      val request = Request.get(URL.root / "hello").addHeader(Header.Authorization.Bearer(tokens.authToken))
       val expectedResponse = "Hello, World, bogus_user!"
       for {
         bookService <- ZIO.service[LiveBookEndpoint]
@@ -123,7 +132,7 @@ object BookServiceSpec extends ZIOSpecDefault {
         assert(body)(equalTo(expectedResponse))
     },
     test("authenticated request should return a list of books for a valid query") {
-      val request = Request.get((URL.root / "books").addQueryParams("q=zio&num=2")).addHeader(Header.Authorization.Bearer(authToken))
+      val request = Request.get((URL.root / "books").addQueryParams("q=zio&num=2")).addHeader(Header.Authorization.Bearer(tokens.authToken))
       val session = Session("bogus_user") // Create a bogus session
       val expectedResponse = """[{"title":"ZIO in Action","authors":["John Doe"],"year":2021}]"""
       for {

@@ -70,7 +70,7 @@ final case class LiveBookEndpoint( auth: Authentication, bookRepo: BookRepo ) ex
   // --------- Login message
   //===============================================================
   val login_endpoint = Endpoint((RoutePattern.GET / "login") ?? Doc.p("Mock of a user login form to obtain auth token"))
-    .out[String](MediaType.text.plain, Doc.p("Got me a token!")) // force plaintext response, not JSON
+    .out[TokenBundle](Doc.p("Got me a token!"))
     .outError[BadCredentialError](Status.Unauthorized)
     .outError[GeneralFailure](Status.InternalServerError)
 
@@ -78,7 +78,7 @@ final case class LiveBookEndpoint( auth: Authentication, bookRepo: BookRepo ) ex
   // and finally the userId + secret would be used to encode a token. Possibly we might want to encode a session id
   // instead of userId, if a session context is desirable.
 
-  val login_handler: Handler[Any, Either[GeneralFailure, BadCredentialError], Unit, String] =
+  val login_handler: Handler[Any, Either[GeneralFailure, BadCredentialError], Unit, TokenBundle] =
     Handler.fromFunctionZIO { (_: Unit) =>
       auth.login("bogus_user", "pwd")
     }

@@ -1,48 +1,34 @@
 
 # REST Security
 
-There are 3 pieces of security protecting a REST call:
+Bedrock's core security protecting REST calls is comprised of 4 basic elements. 
 
 1) HTTPS - this encrypts the communication between client and server
-2) Bearer Token - Must have a token in order to call an endpoint. Should be rotated periodically
-3) Secret Key - This key is used to generate the Bearer Token. Should be rotated periodically
+2) Secret Key - This key is used to generate the Bearer Token. Should be rotated periodically
+3) Bearer Token - Must have a token in order to call an endpoint. Should be rotated periodically
+4) Session Tokens - Used to refresh Bearer Tokens that have expired
 
+>Note that OAuth is also an option, and described separately if you need that capability.
 HTTPS is described here: [HTTPS Support](docs/https.md)
 
-## Bearer Tokens
-A Bearer Token is string payload encrypted with an algorithm using a Secret Key, 
-described below. When you design your REST APIs you will choose those you want protected,
-for example behind a user login, vs those that are "open" (anyone can call them). This means any 
-caller without a Bearer Token, or an expired token, will experience a failure upon calling a REST endpoint.
-
-Bearer Tokens have a configurable expiry (application.conf). The expiration is a balance between usability 
-and security.  Short expirations are more secure but mean that a relatively brief period of inactivity will log 
-out a users. However a short expiration also means an attacker who somehow has gained access to a Bearer 
-Token has very little to take advantage of his prize before it expires. This framework uses a default of 7 minutes
-for Bearer Token Expiration. Bearer Token regeneration is an important way to seamlessly try to keep valid 
-users logged in while also maintaining short token expiry. We will cover that subject after discussing Secret Keys.
-
 ## Secret Keys
-Secret Keys can be any string value. In the sample (local) framework we just use a simple string, however
-it actual production use a random string value would be ideal, for example a random UUID. The Secret Key
-is used to encrypt the Bearer Tokens. Secret Keys should likewise be rotated periodically. The greater the 
-security level the more frequent the rotation cadence, however rotation frequency of Secret Keys will be 
-much less than the rotation frequency of Bearer Tokens.
+Secret Keys are used to sign auth Bearer Tokens and can be any string value. In the sample (local) framework 
+we just use a simple string, however in actual production a more complex value like a random UUID would 
+be ideal. When a Bearer Token (described below) is encoded with the JWT library a Secret Key is provided
+and the token is signed with the key so that the server can detect any attempt at tampering with the token.
 
-One challenge we immediately face with Secret Keys is how they can be used in a scaled, distributed environment.
+One challenge we face with Secret Keys is how they can be used in a scaled, distributed environment.
 Our REST servers will be deployed as clusters of containers running on the cloud (AWS presumed). They all need
 access to the Secret Key, and they will all need access to any rotated key values. We need a central repository
-for Secret Keys.
+for Secret Keys. Fortunately AWS provides a Secrets Manager service. We can use a Java client to access 
+Secret Keys stored in Secrets Manager across all our clustered REST servers. The Secrets Manager provides
+secure and convenient access to Secret Keys to any number of running servers.
 
-Fortunately AWS provides a Secrets Manager service. We can use a Java client to access Secret Keys stored
-in Secrets Manager across all our clustered REST servers. The mechanism provided by Bedrock for key rotation
-is described below.
 
 ## Secret Key Rotation
-Secret Keys, like Bearer Tokens, should be rotated on some regular cadence. AWS Secrets Manager provides a built-in 
-facility for auto-rotation with configurable cadence. For a secure environment some guidelines suggest rotating keys 
-every 30-90 days. Your environment may have regulations that stipulate the frequency, otherwise use your own
-judgement.
+On some regular cadence Secret Keys should be rotated for security. The greater the security level the more frequent 
+the rotation cadence, however rotation frequency of Secret Keys will be relatively long (30-90 days) unless
+regulations in your environment specify otherwise. AWS Secrets Manager provides a built-in facility for auto-rotation with configurable cadence. 
 
 The diagram below shows how key rotation would work in AWS:
 
@@ -50,65 +36,93 @@ The diagram below shows how key rotation would work in AWS:
 
 >NOTE: All The AWS services, lambda functions, etc. must be configured by you in AWS. They are not automatically provided by the Bedrock framework, but are presumed to be present.
 
-There are a number of moving pieces here. When Secrets Manager triggers key rotation, a lambda function you
+There are a number of moving pieces here. When Secrets Manager triggers key auto-rotation, a lambda function you
 provide will be kicked off. We suggest a simple function that just creates a new random UUID string, but it can
-be whatever you want, or regulations require. The new key is then Stored in Secrets Manager, which versions
-the keys (this is important!). AWS Eventbridge can be used to trigger an event that a new key is available. 
-EventBridge will be configured to use another lambda function to detect all running instances of your clustered
-servers, get their IPs, and use SNS to call the /rotate-secret endpoint, which will trigger each instance to 
-reload the current and previous secret keys from AWS Secrets Manager..
+be whatever you want or regulations require. The new key is then Stored in Secrets Manager, which versions
+the keys (this is important!). When the Secrets Manager changes the key's value, AWS Eventbridge can be used to 
+trigger an event that a new key is available. EventBridge will be configured to post an event to a configured
+topic in SNS. Each server, when it starts up, will subscribe to this topic. When this topic in SNS receives an event,
+it will be propagated to each server's /rotate-secret endpoint, which will trigger the server to re-read the
+Secret Keys from Secrets Manager. 
 
->NOTE: The /rotate-secret endpoint is "open", ie not protected by auth token. You will need to configure
->AWS to protect that endpoint to only allow access from SNS.
+## Bearer Tokens
+A Bearer Token is a base64-encoded, 3-part string signed with an algorithm using a Secret Key.  The three parts
+are: Header, Payload, and Signature. This won't matter to your application--it's just a string of gibberish that 
+must accompany every auth-protected HTTP request. When you design your REST APIs you will choose those 
+you want protected, for example behind a user login, vs those that are "open" (anyone can call them). This means any 
+caller without a Bearer Token, or an expired token, will experience a failure upon calling a REST endpoint.
 
-There's a big "but..." here. Communication of the new key to all the clustered instances is not instantaneous.  There 
-are two cases we must consider and develop strategies to handle during the window of time allowed for all servers
-to receive the /rotate-secret message and we have a mix of old/new secrets out there:
+Bearer Tokens have a configurable expiry (application.conf). The expiration is a balance between usability 
+and security.  Short expirations are more secure but means that a relatively brief period of inactivity will log 
+out users. However a short expiration also means an attacker who somehow has gained access to a Bearer 
+Token has very little time to take advantage of his prize before it expires. This framework uses a default of 7 
+minutes for Bearer Token Expiration. 
 
-1. Server has updated their Secret Key but receives a valid and non-expired token generated with the old Secret Key
-In this case we track the previous Secret Key and try to decode with it--but only during the "grandfather" window,
-set in application.conf: old_token_grandfather_period_sec. During this window the server will accept a valid
-and non-expired "old" token. A new token will be generated with the new Secret Key and returned in the
-Authorization header of the Response. (The client is responsible to track the changed token and use it in
-following REST calls.)
+A sample HTTP bearer auth header looks like this:
+```
+Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiIxMjM0NTY3ODkwIiwibmFtZSI6IkpvaG4gRG9lIiwiYWRtaW4iOnRydWV9.SflKxwRJSMeKKF2QT4fwpMeJf36POk6yJV_adQssw5c
+```
 
-2. Server has not received, or missed, the /rotate-secret message, and receives a token using the new Secret Key 
-In this case the Server does nothing but log the occurrence and return Unauthorized. Why? Because neither the
-current nor previous Secret Keys will work. Trying to guess whether to update the keys is likewise a losing game
-because the Server has no way to know whether this presented token is valid-but-new, or expired, or invalid.
+Remember we said that the fact that Secrets Manager versions Secret Keys was important? That's because
+when Secrets Manager auto-rotates to a new key it may take "a while" (seconds, minutes,...) for that message
+to propagate to all servers in the cluster. That means there's some window of time where there may be valid
+tokens flowing around, some signed with the new current Secret Key and others signed with the previous key.
+Bedrock accounts for this and will attempt to decode tokens with the previous key (within a time window) if
+the current key fails. It maintains knowledge of both current and previous Secret Keys at all times.
 
-For case 2, we have a problem.  The strategy here doesn't not really address the problem. The solution needs
-to happen in the cloud, in AWS. We will need a custodian lambda function that triggers on a cadence, say 3
-or 4 times a day, and gets a list of all running server instances and diff's it with a list of all SNS-subscribed
-servers on the key rotation notification topic.  Any servers not subscribed to SNS should be terminated;
-Kubernetes will restart them if needed. Any servers in the SNS subscription list which are not running should
-be un-subscribed by the lamda function. This dual-diff strategy should maintain reasonable cleanliness of the
-subscription stack. Further we can link an alert trigger to the logs when we get a message saying that a server
-may have missed the notification. Case 2 should by far be the more improbable of the two.
+## Session Tokens
+When a user logs into the Bedrock system, along with the expected auth Bearer Token a Session Token is also
+generated. This token has a (configurable) expiration lifespan equal to the maximum session duration allowed.
+For a very secure application, like a bank, this would be expected to be a small value, say 10-15 minutes. An 
+e-commerce app might be longer, say 1 hour or even longer.
 
-## Bearer Token Rotation
-Bearer Token rotation (regeneration) is required on all REST endpoints for security. The login process
-creates the initial bearer token, which expires after so many minutes of inactivity (defaults
-to 7 min in this framework). During normal use, we want this token to be regenerated before it expires,
-again for security. If someone manages to obtain the bearer token they have <10 min to figure
-out how to benefit from that knowledge before the token refreshes and is therefore invalid.
+Session Tokens (sometimes called Refresh Tokens) are a key the calling application uses to refresh a Bearer Token that 
+has expired, seamlessly without requiring a user to re-authenticate. When a Bearer Token expires any further 
+HTTP Requests will fail with an Unauthorized status. The caller to re-try the same call, this time supplying 
+the SessionToken they received upon login, and if the session has not expired, and a certain amount of 
+inactive time has not passed, a new Bearer Token will be generated.
 
-We don't want active users making regular API calls to be logged out when the token expires, so we want to
-regenerate a new token when the user's API call happens within a configurable window.  For example,
-if tokens expire in 10 minutes we can regenerate a new token if the user makes an API call within 5 minutes
-of expiration.  Choosing the right regen window is an inexact science. On one extreme you could 
-regenerate a new token upon every API call. That adds overhead to every request but users will never
-be logged out prematurely.  This strategy avoids a lot of mess where the user can be prematurely logged
-out even though they have not been inactive for the entire time.  The actual timeout is 10 minutes,
-but we tell users the timeout is 5. This eliminates any overlap in timeout with the auto regen window.
-This is pretty secure for most standard business applications; 10 minutes is not a lot of time.
+Session Tokens allows us to keep relatively short timeouts on Bearer Tokens for security, without adversely
+affecting the user experience.
 
-If this strategy is insufficient you have 2 options. You could eliminate the window altogether, ie set
-the regen threshold equal to the timeout ensuring token rotation upon every call. This is extreme,
-and has overhead, but is very secure, for example for a banking application.  Otherwise you could set
-a reasonable window, say 2 minutes, for token rotation.  This does leave open some possibility users
-may be logged out/expired even though they were not inactive for 10 minutes.  No perfect answer
-here--pick your poison based on need.	
+## Authorization Flow
+In Bedrock authorization follows this flow:
+
+1. /login endpoint, given username and password.  Successful login returns the following in the Reponse body:
+```
+```json
+{
+  "sessionToken": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJib2d1c191c2VyIiwiZXhwIjoxNzM2ODc3OTgwLCJpYXQiOjE3MzY4NzA3ODB9.KQobpopJvyhLLXCkvgC2Z1C-ccvnTpmBo1J8hTIndNo-yDXVXiF04r6T8ybrNNbBWz7tcrEL3DXQTPOhk7Ui5Q",
+  "authToken": "eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJib2d1c191c2VyIiwiZXhwIjoxNzM2ODcxMjAwLCJpYXQiOjE3MzY4NzA3ODB9.xhCp9dW-zZdZFnkCP_bQWwsRpBoCgg0pLP1ExcMQE7bORqMgc9k76EsrtSEnogbnxshgHRSB802xFazjsr4jhg"
+}
+```
+2. Application uses the authToken for all subsequent API calls
+3. The authToken ultimately expires and a status of Unauthorized will be returned for any attempted API calls
+4. The calling app will retry a failed API call, this time passing the header along with the expired authToken as usual:
+```
+X-Session-Token: eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJib2d1c191c2VyIiwiZXhwIjoxNzM2ODc3OTgwLCJpYXQiOjE3MzY4NzA3ODB9.KQobpopJvyhLLXCkvgC2Z1C-ccvnTpmBo1J8hTIndNo-yDXVXiF04r6T8ybrNNbBWz7tcrEL3DXQTPOhk7Ui5Q
+Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzUxMiJ9.eyJzdWIiOiJib2d1c191c2VyIiwiZXhwIjoxNzM2ODcxMjAwLCJpYXQiOjE3MzY4NzA3ODB9.xhCp9dW-zZdZFnkCP_bQWwsRpBoCgg0pLP1ExcMQE7bORqMgc9k76EsrtSEnogbnxshgHRSB802xFazjsr4jhg
+```
+5. If the session token is not expired and the current time is still within the allowed period of inactivity, a new authToken will be generated and returned in the Response Authorization header
+
+The inactivity period works like this. Let's say Bearer Token (authToken) expiration is configured to be 7 minutes. These 
+tokens expire regardless of user activity or not. Let's say we have an authToken which is now expired. Can we refresh
+it? It depends. Another configuration (refresh_window_sec) defines how long *after* the Bearer Token has expired
+we are allowed to refresh it. Let's say that's configured for 5 minutes. (We're presuming the Session Token has a
+lifespan of longer, say 1 hour, so it's not a factor here.) This means that after login, a user has an effective period
+of allowed inactivity of 7+5=12 minutes of inactivity before they are forcibly expired and must re-authenticate.
+The Bearer Token's expiry of 7 minutes maintains a suitably low surface area for a potential attacker. And of course
+if the user keeps sporadically using the app, without leaving it idle for more than 12 minutes, they can keep getting
+refreshed Bearer Tokens up until the session expires. 
+
+### Gotcha!
+Remember earlier we discussed that when Secret Keys auto-rotate, there is a window of time when tokens
+signed by old and new keys may co-exist? Whenever Bedrock detects an old signature after it has already
+updated to a new Secret Key, it will automatically re-issue a new Bearer Token signed with the new current key.
+This new token is returned in the Response Authentication header, just like when the app requests a token
+refresh with a Session Token. What does this mean? It means applications must always check for an
+Authorization header, as Bedrock may send a new Bearer Token even when the app has not requested one.
+If the app fails to replace the old authToken with the new one the user may face being forcibly logged out.
 
 ## Tips  
 

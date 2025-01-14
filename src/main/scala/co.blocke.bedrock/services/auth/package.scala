@@ -21,9 +21,16 @@ case class Session(userId: String)  // This is the payload of the JWT token and 
 
 case class Key(version: String, value: String, instantCreated: Instant)
 
+case class KeyBundle( currentTokenKey: Key, previousTokenKey: Option[Key], sessionKey: Key )
+
 case class TokenHeader(sub: String, iat: Long)
 object TokenHeader:
-  implicit val decoder: JsonDecoder[TokenHeader] = DeriveJsonDecoder.gen[TokenHeader]
+  implicit val codec: JsonCodec[TokenHeader] = DeriveJsonCodec.gen[TokenHeader]
+
+case class TokenBundle(sessionToken: String, authToken: String)
+object TokenBundle:
+  implicit val schema: Schema[TokenBundle] = DeriveSchema.gen[TokenBundle]
+  implicit val codec: JsonCodec[TokenBundle] = DeriveJsonCodec.gen[TokenBundle]
 
 // Convert between ZIO Clock (for testability) to Java Clock (for JWT library)
 object ClockConverter {

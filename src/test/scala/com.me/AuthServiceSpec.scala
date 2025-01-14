@@ -7,7 +7,6 @@ import zio.test.Assertion.*
 import zio.http.*
 import services.db.*
 import services.auth.*
-import com.typesafe.config.{Config, ConfigFactory}
 import java.time.Instant
 import services.db.BookRepo
 
@@ -33,24 +32,20 @@ object AuthServiceSpec extends ZIOSpecDefault {
     private var current: Key = Key(s"v$version", s"secret_$version", Instant.EPOCH) // Placeholder
     private var previous: Option[Key] = None
 
-    override def getSecretKey: ZIO[Any, Throwable, (Key, Option[Key])] =
+    override def getSecretKey: ZIO[Any, Throwable, KeyBundle] =
       for {
-        now <- clock.instant.map(_.toEpochMilli) // Fetch time dynamically
-        nowInstant = Instant.ofEpochMilli(now)
+        now <- clock.instant //.map(_.toEpochMilli) // Fetch time dynamically
         result <- ZIO.succeed {
           if version == 1 then
-            current = Key(s"v$version", s"secret_$version", nowInstant)
+            current = Key(s"v$version", s"secret_$version", now)
           val output = (current, previous)
           previous = Some(current)
           version += 1
-          current = Key(s"v$version", s"secret_$version", nowInstant)
+          current = Key(s"v$version", s"secret_$version", now)
           output
         }
-      } yield result
+      } yield KeyBundle(current, previous, Key("sess_ver", "theWayIsShut", now))
   }
-
-  val configLayer: ULayer[Config] =
-    ZLayer.succeed(ConfigFactory.load()) // Provide Config independently
 
   val secretKeyManagerLayer: ZLayer[Any, Nothing, SecretKeyManager] =
     ZLayer.fromZIO {
@@ -59,89 +54,135 @@ object AuthServiceSpec extends ZIOSpecDefault {
       } yield new MockSecretKeyManager(clock)
     }
 
-  val authenticationLayer: ZLayer[Config & SecretKeyManager, Throwable, Authentication] =
+  val authenticationLayer: ZLayer[AuthConfig & SecretKeyManager, Throwable, Authentication] =
     ZLayer.fromZIO {
       for {
-        config <- ZIO.service[Config] // Depends on Config
+        authConfig <- ZIO.service[AuthConfig] // Depends on Config
         manager <- ZIO.service[SecretKeyManager] // Depends on SecretKeyManager
         clock <- ZIO.clock // Depends on Clock
-        (currentKey, previousKey) <- manager.getSecretKey
-      } yield new LiveAuthentication(config, clock, manager, currentKey, previousKey)
+        keyBundle <- manager.getSecretKey
+      } yield new LiveAuthentication(authConfig, clock, manager, keyBundle)
     }
 
   // Compose the final layer
   val finalLayer = 
-    configLayer ++ secretKeyManagerLayer ++ configLayer >>> authenticationLayer ++ secretKeyManagerLayer
+    AppConfig.live ++ secretKeyManagerLayer >>> authenticationLayer ++ secretKeyManagerLayer
 
   def spec = suite("AuthServiceSpec")(
     test("Simple token encoding and decoding should work (w/o rotation)") {
       for {
         auth     <- ZIO.service[Authentication]
-        curKey   =  auth.asInstanceOf[LiveAuthentication].getCurrentSecretKey
-        // oldToken <- auth.jwtEncode("TestUser", curKey.value)
-        oldToken <- auth.login("TestUser", "blah")
-        result   <- auth.asInstanceOf[LiveAuthentication].decodeToken(oldToken)
+        curKeyBundle =  auth.asInstanceOf[LiveAuthentication].getKeyBundle
+        loginTokens <- auth.login("TestUser", "blah")
+        result   <- auth.asInstanceOf[LiveAuthentication].decodeToken(loginTokens.authToken,None)
       } yield assert(result._2)(equalTo(Session("TestUser"))) &&
         assert(result._1)(isNone)
     },
-    test("Token decoding should fail upon token expiry (w/o rotation)") {
+    test("Token decoding should fail upon token expiry") {
       for {
         auth     <- ZIO.service[Authentication]
-        curKey   =  auth.asInstanceOf[LiveAuthentication].getCurrentSecretKey
-        oldToken <- auth.jwtEncode("TestUser", curKey.value)
+        curKeyBundle = auth.asInstanceOf[LiveAuthentication].getKeyBundle
+        loginTokens <- auth.login("TestUser", "blah")
         _        <- TestClock.adjust(421.seconds)
-        result   <- auth.asInstanceOf[LiveAuthentication].decodeToken(oldToken).either
+        result   <- auth.asInstanceOf[LiveAuthentication].decodeToken(loginTokens.authToken,None).either
       } yield result match {
         case Left(response) =>
           assert(response.status)(equalTo(Status.Unauthorized)) // Assert the error Response
+        case Right(_) =>
+          assert(false)(equalTo(true)) // Fail the test if no error occurs
+      }
+    },
+    test("Token refresh should succeed upon token expiry and the presence of a valid session token") {
+      for {
+        auth     <- ZIO.service[Authentication]
+        curKeyBundle = auth.asInstanceOf[LiveAuthentication].getKeyBundle
+        loginTokens <- auth.login("TestUser", "blah")
+        _        <- TestClock.adjust(421.seconds)
+        result1  <- auth.asInstanceOf[LiveAuthentication].decodeToken(loginTokens.authToken,None).either // expired
+        result2  <- auth.asInstanceOf[LiveAuthentication].decodeToken(loginTokens.authToken,Some(loginTokens.sessionToken)).either
+      } yield result1 match {
+        case Left(response) =>
+          assert(response.status)(equalTo(Status.Unauthorized)) // Assert the error Response
+          result2 match {
+            case Left(response) =>
+              assert(false)(equalTo(true)) // Fail the test if error occurs
+            case Right((newAuthToken, session)) =>
+              assert(newAuthToken)(not(isNone)) && assert(session)(equalTo(Session("TestUser")))
+          }
+        case Right(_) =>
+          assert(false)(equalTo(true)) // Fail the test if no error occurs
+      }
+    },
+    test("Token refresh should fail upon token expiry and the presence of an valid session token outside refresh window") {
+      for {
+        auth     <- ZIO.service[Authentication]
+        curKeyBundle = auth.asInstanceOf[LiveAuthentication].getKeyBundle
+        loginTokens <- auth.login("TestUser", "blah")
+        _        <- TestClock.adjust(841.seconds)
+        result1  <- auth.asInstanceOf[LiveAuthentication].decodeToken(loginTokens.authToken,None).either // expired
+        result2  <- auth.asInstanceOf[LiveAuthentication].decodeToken(loginTokens.authToken,Some(loginTokens.sessionToken)).either
+      } yield result1 match {
+        case Left(response) =>
+          assert(response.status)(equalTo(Status.Unauthorized)) // Assert the error Response
+          result2 match {
+            case Left(response) =>
+              assert(response.status)(equalTo(Status.Unauthorized)) // Assert the error Response
+            case Right((newAuthToken, session)) =>
+              assert(false)(equalTo(true)) // Fail the test if error occurs
+          }
+        case Right(_) =>
+          assert(false)(equalTo(true)) // Fail the test if no error occurs
+      }
+    },
+    test("Token refresh should fail upon token expiry and the presence of an expired session token") {
+      for {
+        auth         <- ZIO.service[Authentication]
+        curKeyBundle = auth.asInstanceOf[LiveAuthentication].getKeyBundle
+        loginTokens  <- auth.login("TestUser", "blah")
+        _            <- TestClock.adjust(7201.seconds)
+        result1      <- auth.asInstanceOf[LiveAuthentication].decodeToken(loginTokens.authToken,None).either // expired
+        result2      <- auth.asInstanceOf[LiveAuthentication].decodeToken(loginTokens.authToken,Some(loginTokens.sessionToken)).either
+      } yield result1 match {
+        case Left(response) =>
+          assert(response.status)(equalTo(Status.Unauthorized)) // Assert the error Response
+          result2 match {
+            case Left(response) =>
+              assert(response.status)(equalTo(Status.Unauthorized)) // Assert the error Response
+            case Right((newAuthToken, session)) =>
+              assert(false)(equalTo(true)) // Fail the test if error occurs
+          }
         case Right(_) =>
           assert(false)(equalTo(true)) // Fail the test if no error occurs
       }
     },
     test("Secret Key rotation works") {
       for {
-        auth     <- ZIO.service[Authentication]
-        curKey   =  auth.asInstanceOf[LiveAuthentication].getCurrentSecretKey
-        prevKey  =  auth.asInstanceOf[LiveAuthentication].getPreviousSecretKey
-        _        <- auth.updateKeys
-        curKey2  =  auth.asInstanceOf[LiveAuthentication].getCurrentSecretKey
-        prevKey2 =  auth.asInstanceOf[LiveAuthentication].getPreviousSecretKey
-      } yield assert(prevKey2.get)(equalTo(curKey)) &&
-        assert(curKey2)(not(equalTo(curKey)))
+        auth           <- ZIO.service[Authentication]
+        curKeyBundle   =  auth.asInstanceOf[LiveAuthentication].getKeyBundle
+        _              <- auth.updateKeys
+        curKeyBundle2  =  auth.asInstanceOf[LiveAuthentication].getKeyBundle
+      } yield assert(curKeyBundle2.previousTokenKey.get)(equalTo(curKeyBundle.currentTokenKey)) &&
+        assert(curKeyBundle2.currentTokenKey)(not(equalTo(curKeyBundle.currentTokenKey)))
     },
-    test("After Secret Key rotation, old tokens should work within old_token_grandfather_period_sec window (new token generated)") {
+    test("After Secret Key rotation, old tokens should work with the previous key if they are not otherwise expired (new token generated)") {
       for {
         auth     <- ZIO.service[Authentication]
-        curKey   =  auth.asInstanceOf[LiveAuthentication].getCurrentSecretKey
-        oldToken <- auth.jwtEncode("TestUser", curKey.value)
+        curKeyBundle = auth.asInstanceOf[LiveAuthentication].getKeyBundle
+        loginTokens <- auth.login("TestUser", "blah")
         _        <- auth.updateKeys
-        result   <- auth.asInstanceOf[LiveAuthentication].decodeToken(oldToken)
+        result   <- auth.asInstanceOf[LiveAuthentication].decodeToken(loginTokens.authToken, None)
       } yield assert(result._2)(equalTo(Session("TestUser"))) &&
         assert(result._1)((not(isNone))) &&
-        assert(result._1.get)(not(equalTo(oldToken)))
-    },
-    test("After Secret Key rotation, old tokens should fail outside old_token_grandfather_period_sec window") {
-      for {
-        auth     <- ZIO.service[Authentication]
-        curKey   =  auth.asInstanceOf[LiveAuthentication].getCurrentSecretKey
-        oldToken <- auth.jwtEncode("TestUser", curKey.value)
-        _        <- auth.updateKeys
-        _        <- TestClock.adjust(185.seconds)
-        result   <- auth.asInstanceOf[LiveAuthentication].decodeToken(oldToken).either
-      } yield result match {
-        case Left(response) =>
-          assert(response.status)(equalTo(Status.Unauthorized)) // Assert the error Response
-        case Right(_) =>
-          assert(false)(equalTo(true)) // Fail the test if no error occurs
-      }
+        assert(result._1.get)(not(equalTo(loginTokens.authToken)))
     },
     test("After Secret Key rotation, a server may have missed the rotate-secret message and not have any current token") {
       for {
+        clock    <- ZIO.clock
         auth     <- ZIO.service[Authentication]
         keyMgr   <- ZIO.service[SecretKeyManager]
         keys     <- keyMgr.getSecretKey  // rotate the keys but don't tell Authentication with auth.updateKeys
-        newToken <- auth.jwtEncode("TestUser", keys._1.value)
-        result   <- auth.asInstanceOf[LiveAuthentication].decodeToken(newToken).either
+        token    <- JwtToken.jwtEncode("TestUser", keys.currentTokenKey.value, 3600)(clock)
+        result   <- auth.asInstanceOf[LiveAuthentication].decodeToken(token,None).either
       } yield result match {
         case Left(response) =>
           assert(response.status)(equalTo(Status.Unauthorized)) // Assert the error Response
@@ -149,29 +190,6 @@ object AuthServiceSpec extends ZIOSpecDefault {
           assert(false)(equalTo(true)) // Fail the test if no error occurs
       }
     },
-    // Token rotation window:
-    // token_expiration_sec - token_rotation_sec -> Don't expire tokens within this window
-    test("Tokens should not be rotated upon activity outside the token_rotation_sec window") {
-      for {
-        auth     <- ZIO.service[Authentication]
-        curKey   =  auth.asInstanceOf[LiveAuthentication].getCurrentSecretKey
-        oldToken <- auth.jwtEncode("TestUser", curKey.value)
-        _        <- TestClock.adjust(275.seconds)
-        result   <- auth.asInstanceOf[LiveAuthentication].decodeToken(oldToken)
-      } yield assert(result._2)(equalTo(Session("TestUser"))) &&
-        assert(result._1)(isNone)
-    },
-    test("Tokens should not be rotated upon activity outside the token_rotation_sec window") {
-      for {
-        auth     <- ZIO.service[Authentication]
-        curKey   =  auth.asInstanceOf[LiveAuthentication].getCurrentSecretKey
-        oldToken <- auth.jwtEncode("TestUser", curKey.value)
-        _        <- TestClock.adjust(350.seconds)
-        result   <- auth.asInstanceOf[LiveAuthentication].decodeToken(oldToken)
-      } yield assert(result._2)(equalTo(Session("TestUser"))) &&
-        assert(result._1)(not(isNone)) &&
-        assert(result._1.get)(not(equalTo(oldToken)))
-    }
   ).provide(finalLayer ++ Runtime.removeDefaultLoggers)
   
 }

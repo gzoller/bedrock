@@ -12,19 +12,20 @@ import software.amazon.awssdk.regions.Region
 import software.amazon.awssdk.services.secretsmanager.model.{GetSecretValueRequest, GetSecretValueResponse, ListSecretVersionIdsRequest}
 import scala.jdk.CollectionConverters.*
 
+
 /**
   * Get a secret from AWS Secrets Manager
   */
 trait SecretKeyManager:
-  def getSecretKey: ZIO[Any, Throwable, (Key, Option[Key])]
+  def getSecretKey: ZIO[Any, Throwable, KeyBundle]
 
 
 final case class LiveSecretKeyManager(authConfig: AuthConfig, awsRegion: Option[Region]) extends SecretKeyManager:
 
-  def getSecretKey: ZIO[Any, Throwable, (Key,Option[Key])] = 
+  def getSecretKey: ZIO[Any, Throwable, KeyBundle] = 
     for {
       localstackUri <- ZIO
-        .attempt(new java.net.URI(authConfig.localstackUrl))
+        .attempt(new java.net.URI(authConfig.localstackUrl.get))  // ZZZ this is optional...treat accordingly
 
       outcome <- ZIO.attemptBlocking {
           val (endpointOverride, credentialsProvider) = if !awsRegion.isDefined then 
@@ -53,35 +54,32 @@ final case class LiveSecretKeyManager(authConfig: AuthConfig, awsRegion: Option[
             val previousVersion = versionsResponse.versions.asScala.find(_.versionStages.contains("AWSPREVIOUS")).map(_.versionId)
             // There may or may not be a previous version.
 
-            // Create a request to retrieve the current secret
-            val currentSecret = {
-              val getSecretValueRequest = GetSecretValueRequest.builder()
-                .secretId(authConfig.secretName)
-                .versionId(currentVersion)
-                .build()
+            def getSecret(secretName: String, ver: Option[String]): Key = {
+              val getSecretValueRequestRaw = GetSecretValueRequest.builder()
+                .secretId(secretName)
+              val getSecretValueRequest = 
+                ver
+                  .map( v => getSecretValueRequestRaw.versionId(v).build() )
+                  .getOrElse( getSecretValueRequestRaw.build() )
 
               // Fetch the secret value
               val getSecretValueResponse: GetSecretValueResponse = secretsClient.getSecretValue(getSecretValueRequest)
 
               // Return the secret string
               Key(currentVersion, getSecretValueResponse.secretString(), getSecretValueResponse.createdDate)
-              }
+            }
+            
+            // Retreive the current version of the key
+            val currentSecret = getSecret(authConfig.secretName, Some(currentVersion))
 
-            // Create a request to retrieve the current secret
+            // Retreive the previous version of the key
             val previousSecret = previousVersion.map{ prevVer => 
-              val getSecretValueRequest = GetSecretValueRequest.builder()
-                .secretId(authConfig.secretName)
-                .versionId(prevVer)
-                .build()
-
-              // Fetch the secret value
-              val getSecretValueResponse: GetSecretValueResponse = secretsClient.getSecretValue(getSecretValueRequest)
-
-              // Return the secret string
-              Key(prevVer, getSecretValueResponse.secretString(), getSecretValueResponse.createdDate)
+              getSecret(authConfig.secretName, Some(prevVer))
               }
 
-              (currentSecret, previousSecret)
+            val sesssionSecret = getSecret(authConfig.sessionSecretName, None)
+
+            KeyBundle(currentSecret, previousSecret, sesssionSecret)
           } finally {
               secretsClient.close()
           }
