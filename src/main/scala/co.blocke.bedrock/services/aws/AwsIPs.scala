@@ -29,3 +29,11 @@ case class Prefix(
 
 object Prefix:
   implicit val decoder: JsonDecoder[Prefix] = DeriveJsonDecoder.gen[Prefix]
+
+
+case class ValidAwsIpRanges(
+  ipv4: List[String],
+  ipv6: List[String]
+)
+
+// val localhostRange = "127.0.0.0/8"

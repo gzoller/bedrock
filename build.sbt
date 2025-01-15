@@ -45,16 +45,15 @@ lazy val root = project
       "dev.zio" %% "zio-config-magnolia" % "4.0.3",  // For automatic derivation of ConfigDescriptor
       "dev.zio" %% "zio-config-typesafe" % "4.0.3",  // For HOCON (Typesafe Config) support
 
-
       // ---- AWS
       "software.amazon.awssdk" % "core" % "2.20.0",            // AWS SDK Core
       "software.amazon.awssdk" % "secretsmanager" % "2.20.0",  // Secrets Manager SDK
-      "software.amazon.awssdk" % "eventbridge" % "2.29.43",    // EventBridge 
 
       // ---- Misc
       "ch.qos.logback" % "logback-classic" % "1.4.6",
       "com.github.jwt-scala" %% "jwt-core" % "10.0.1",
       "com.github.jwt-scala" %% "jwt-core" % "10.0.1",
+      "commons-net" % "commons-net" % "3.9.0",
       "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-core" % "2.20.3",
       "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-macros" % "2.20.3" % "provided",
 

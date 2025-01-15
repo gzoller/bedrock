@@ -36,14 +36,14 @@ object Main extends ZIOAppDefault {
 
     val program =
       for {
-        bookEndpoint <- ZIO.service[BookEndpoint]
+        bookEndpoint     <- ZIO.service[BookEndpoint]
         awsEventEndpoint <- ZIO.service[AwsEventEndpoint]
-        awsEnv <- ZIO.service[AwsEnvironment]
-        validIps <- awsEnv.getAwsIPs
-        routes = bookEndpoint.routes ++ awsEventEndpoint.routes
-        shutdownPromise <- Promise.make[Nothing, Unit]
-        serverFiber <- Server.serve(routes).fork
-        _ <- shutdownPromise.await.onInterrupt(serverFiber.interrupt)
+        awsEnv           <- ZIO.service[AwsEnvironment]
+        _                <- awsEnv.getAwsIPs  // retrieve valid AWS IP ranges
+        routes           =  bookEndpoint.routes ++ awsEventEndpoint.routes
+        shutdownPromise  <- Promise.make[Nothing, Unit]
+        serverFiber      <- Server.serve(routes).fork
+        _                <- shutdownPromise.await.onInterrupt(serverFiber.interrupt)
       } yield ()
 
     ZIO.scoped {
