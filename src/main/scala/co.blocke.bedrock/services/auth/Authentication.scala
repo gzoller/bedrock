@@ -2,9 +2,9 @@ package co.blocke.bedrock
 package services
 package auth
 
+import co.blocke.bedrock.services.auth.JwtToken.TokenError
 import zio.*
 import zio.http.*
-import co.blocke.bedrock.services.auth.JwtToken.TokenError
 
 
 trait Authentication:

@@ -2,10 +2,12 @@ package co.blocke.bedrock
 package services
 package auth
 
-import zio.*
-import zio.schema.{DeriveSchema, Schema}
-import zio.json.*
 import java.time.*
+
+import zio.*
+import zio.json.*
+import zio.schema.DeriveSchema
+import zio.schema.Schema
 
 case class BadCredentialError(message: String)
 case class GeneralFailure(message: String)

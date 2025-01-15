@@ -32,7 +32,7 @@ sleep 2
 # Create the lambda function
 echo ">> Creating Lambda Function"
 aws lambda create-function \
-    --endpoint-url=$AWS_ENDPOINT_URL \
+    --endpoint-url=$AWS_ENDPOINT_URL$AWS_ENDPOINT_URL \
     --function-name NotifySecretChange \
     --runtime python3.9 \
     --role bedrock \
@@ -101,3 +101,4 @@ aws sns add-permission \
     --label AllowEventBridge \
     --aws-account-id 123456789012 \
     --action-name Publish
+

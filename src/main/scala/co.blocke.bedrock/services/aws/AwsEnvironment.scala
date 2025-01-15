@@ -2,24 +2,44 @@ package co.blocke.bedrock
 package services
 package aws
 
+import scala.compiletime.uninitialized
+
+import org.apache.commons.net.util.SubnetUtils
+import software.amazon.awssdk.auth.credentials.*
+import software.amazon.awssdk.regions.Region
 import zio.*
 import zio.http.*
 import zio.json.*
-import software.amazon.awssdk.regions.Region
-import org.apache.commons.net.util.SubnetUtils
-import scala.compiletime.uninitialized
 
 
 trait AwsEnvironment:
-  def getRegion: ZIO[Client, Nothing, Option[Region]]
+  def isRunningLocally: Boolean
+  def getRegion: Region
+  def getCreds: (Option[java.net.URI], AwsCredentialsProvider)
   def getAwsIPs: ZIO[Client & Scope, Throwable, Unit]
   def isIpAllowed(ip: String): ZIO[Any, Throwable, Boolean]
 
 
 // This is the live/real implementation. Could produce a mock implementation to inject for testing
-final case class LiveAwsEnvironment(awsConfig: AWSConfig) extends AwsEnvironment:
+final case class LiveAwsEnvironment(awsConfig: AWSConfig, region: Option[Region]) extends AwsEnvironment:
 
   private var validAwsIpRanges: ValidAwsIpRanges = uninitialized  // a set-once variable
+
+  def isRunningLocally: Boolean = region.isEmpty
+  def getRegion: Region = region.getOrElse(Region.US_EAST_1)
+
+  // This bit o'magic is needed to differentiate runinning locally on Localstack vs
+  // on real AWS. These values are used to build various AWS clients.
+  def getCreds: (Option[java.net.URI], AwsCredentialsProvider) = 
+    if isRunningLocally then 
+      // LocalStack configuration if no actual AWS is found
+      (
+        awsConfig.localstackUrl.map(java.net.URI(_)), // LocalStack endpoint
+        StaticCredentialsProvider.create(AwsBasicCredentials.create("foo", "bar")) // Mock credentials
+      )
+    else
+      // Non-local configuration, ie running on real AWS (uses default AWS credentials)
+      (None, DefaultCredentialsProvider.create())
 
   def getAwsIPs: ZIO[Scope & Client, Throwable, Unit] =
     for {
@@ -59,7 +79,10 @@ final case class LiveAwsEnvironment(awsConfig: AWSConfig) extends AwsEnvironment
     }
   }
 
-  def getRegion: ZIO[Client, Nothing, Option[Region]] =
+
+object AwsEnvironment:
+
+  def getRegion(awsConfig: AWSConfig): ZIO[Client, Nothing, Option[Region]] =
     (for {
       _ <- ZIO.logInfo("Checking for AWS")
       responseOpt <- Client.batched(Request.get(awsConfig.regionUrl)).timeout(2.seconds) // Perform the HTTP request with timeout
@@ -74,12 +97,11 @@ final case class LiveAwsEnvironment(awsConfig: AWSConfig) extends AwsEnvironment
       ZIO.logError(s"Failed to fetch AWS region (normal if running locally): ${error.getMessage}") *> ZIO.succeed(None)
     }
 
-
-object AwsEnvironment:
   // Creates a live instance for dependency injection in main program
-  val live: ZLayer[AWSConfig, Nothing, AwsEnvironment] =
+  val live: ZLayer[AWSConfig & Client, Nothing, AwsEnvironment] =
     ZLayer.fromZIO {
       for {
         awsConfig <- ZIO.service[AWSConfig]
-      } yield LiveAwsEnvironment(awsConfig)
+        region <- getRegion(awsConfig)
+      } yield LiveAwsEnvironment(awsConfig, region)
     }

@@ -20,6 +20,9 @@ IN-PROGRESS:
    - figure out how to handle transition period where 2 keys are valid at the same time for a short defined window - NEEDS TESTING
    - using a config setting, determine when to re-gen a new bearer token prior to expiration, eg 7 min expiration, so re-gen at 2 min before - NEEDS TESTING
 
+DEPLOYMENT/AWS:
+* Configure logback to send logs to CloudWatch. May need templated config files to do this.
+
 TODO:
 * Auto-generate Swagger config (fixed with my own mods to ZIO HTTP...PR pending)
 * Hide server.crt/server.key files but ensure they're published & packaged correctly

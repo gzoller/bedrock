@@ -2,9 +2,9 @@ package co.blocke.bedrock
 package services
 package auth
 
+import pdi.jwt.*
 import zio.*
 import zio.json.*
-import pdi.jwt.*
 
 
 case class JwtPayload(sub: Option[String])

@@ -12,14 +12,14 @@ case class AuthConfig(
     refreshWindowSec: Int,
     sessionDurationSec: Int,
     secretName: String,
-    sessionSecretName: String,
-    localstackUrl: Option[String]  // this is a string b/c ultimately its parsed into a URI
+    sessionSecretName: String
 )
 
 case class AWSConfig(
     snsTopicArn: String,
     regionUrl: URL,
-    ipRangesUrl: URL
+    ipRangesUrl: URL,
+    localstackUrl: Option[String]  // this is a string b/c ultimately its parsed into a URI
 )
 
 object AppConfig:

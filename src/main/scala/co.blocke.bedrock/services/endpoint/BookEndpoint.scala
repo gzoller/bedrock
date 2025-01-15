@@ -2,19 +2,25 @@ package co.blocke.bedrock
 package services
 package endpoint
 
-import auth.*
-import db.BookRepo
+import scala.collection.immutable.ListMap
 
 import zio.*
 import zio.http.*
 import zio.http.codec.*
 import zio.http.codec.PathCodec.*
-import zio.http.endpoint.{AuthType,Endpoint}
+import zio.http.endpoint.AuthType
+import zio.http.endpoint.Endpoint
 import zio.http.endpoint.openapi.*
-import zio.http.endpoint.openapi.OpenAPI.{Components,Key,ReferenceOr}
+import zio.http.endpoint.openapi.OpenAPI.Components
+import zio.http.endpoint.openapi.OpenAPI.Key
+import zio.http.endpoint.openapi.OpenAPI.ReferenceOr
 import zio.http.endpoint.openapi.OpenAPI.SecurityScheme.*
-import scala.collection.immutable.ListMap
-import zio.schema._
+import zio.schema.*
+
+import auth.*
+import db.BookRepo
+import zio.http.endpoint.AuthType.Bearer
+import zio.http.endpoint.AuthType.Bearer
 
 trait BookEndpoint:
   def routes: Routes[Any, Response]
@@ -22,8 +28,8 @@ trait BookEndpoint:
 
 final case class LiveBookEndpoint( auth: Authentication, bookRepo: BookRepo ) extends BookEndpoint:
 
-  val authHeaderDoc = Doc.p("Requires an `Authorization: Bearer <token>` header to access this endpoint.")
-  val bearerAuthScheme = OpenAPI.SecurityScheme.Http(
+  val authHeaderDoc: Doc = Doc.p("Requires an `Authorization: Bearer <token>` header to access this endpoint.")
+  val bearerAuthScheme: Http = OpenAPI.SecurityScheme.Http(
     scheme = "bearer",
     bearerFormat = Some("JWT"), // Optional: specify the token format
     description = Some(Doc.p("Use a Bearer token for authentication."))
@@ -31,7 +37,7 @@ final case class LiveBookEndpoint( auth: Authentication, bookRepo: BookRepo ) ex
 
   // --------- Search for books 
   //===============================================================
-  val book_endpoint = Endpoint((RoutePattern.GET / "books") ?? (Doc.p("Route for querying books" + authHeaderDoc)))
+  val book_endpoint: Endpoint[Unit, (String, Int), ZNothing, List[Book], Bearer.type] = Endpoint((RoutePattern.GET / "books") ?? (Doc.p("Route for querying books" + authHeaderDoc)))
     .query(HttpCodec.query[String]("q").examples (("example1", "scala"), ("example2", "zio")) ?? Doc.p(
           "Query parameter for searching books"
         ))
@@ -50,26 +56,26 @@ final case class LiveBookEndpoint( auth: Authentication, bookRepo: BookRepo ) ex
   val book_handler: Handler[Session, Nothing, (String,Int), List[Book]] = handler { (query: String, num: Int) =>
     withContext((session: Session) => bookRepo.find(query) )
   }
-  val bookSearchRoute = Routes(book_endpoint.implementHandler(book_handler)) @@ auth.bearerAuthWithContext
+  val bookSearchRoute: Routes[Any, Nothing] = Routes(book_endpoint.implementHandler(book_handler)) @@ auth.bearerAuthWithContext
 
 
   // --------- Hello message
   //===============================================================
-  val hello_endpoint = Endpoint(RoutePattern.GET / "hello" ?? (Doc.p("Say hello to the people") + authHeaderDoc))
+  val hello_endpoint: Endpoint[Unit, Unit, ZNothing, String, Bearer.type] = Endpoint(RoutePattern.GET / "hello" ?? (Doc.p("Say hello to the people") + authHeaderDoc))
     .out[String](MediaType.text.plain, Doc.p("Just a hello message")) // force plaintext response, not JSON
     .auth[AuthType.Bearer](AuthType.Bearer)
 
-  val hello_handler = handler { (_: Unit) =>
+  val hello_handler: Handler[Session, Nothing, Unit, String] = handler { (_: Unit) =>
     ZIO.service[Session].map{ session =>
       s"Hello, World, ${session.userId}!"
     }
   }
-  val helloRoute = Routes(hello_endpoint.implementHandler(hello_handler)) @@ auth.bearerAuthWithContext
+  val helloRoute: Routes[Any, Nothing] = Routes(hello_endpoint.implementHandler(hello_handler)) @@ auth.bearerAuthWithContext
 
 
   // --------- Login message
   //===============================================================
-  val login_endpoint = Endpoint((RoutePattern.GET / "login") ?? Doc.p("Mock of a user login form to obtain auth token"))
+  val login_endpoint: Endpoint[Unit, Unit, Either[GeneralFailure, BadCredentialError], TokenBundle, zio.http.endpoint.AuthType.None.type] = Endpoint((RoutePattern.GET / "login") ?? Doc.p("Mock of a user login form to obtain auth token"))
     .out[TokenBundle](Doc.p("Got me a token!"))
     .outError[BadCredentialError](Status.Unauthorized)
     .outError[GeneralFailure](Status.InternalServerError)
@@ -83,12 +89,12 @@ final case class LiveBookEndpoint( auth: Authentication, bookRepo: BookRepo ) ex
       auth.login("bogus_user", "pwd")
     }
 
-  val loginRoute = Routes(login_endpoint.implementHandler(login_handler))
+  val loginRoute: Routes[Any, Nothing] = Routes(login_endpoint.implementHandler(login_handler))
 
   
   // --------- Swagger, if non-prod
   //===============================================================
-  val swaggerRoutes = 
+  val swaggerRoutes: Routes[Any, Response] = 
     if co.blocke.bedrock.MyBuildInfo.isProd then
       Routes.empty // disable Swagger for prod deployment
     else
@@ -103,7 +109,7 @@ final case class LiveBookEndpoint( auth: Authentication, bookRepo: BookRepo ) ex
       SwaggerUI.routes("docs" / "openapi", openAPI)
 
   // --------- Bundle up all routes
-  def routes = {
+  def routes: Routes[Any, Response] = {
     // Provide a default SessionContext for unsecured routes
     val unsecuredRoutes = loginRoute ++ swaggerRoutes
 

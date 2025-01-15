@@ -48,12 +48,14 @@ lazy val root = project
       // ---- AWS
       "software.amazon.awssdk" % "core" % "2.20.0",            // AWS SDK Core
       "software.amazon.awssdk" % "secretsmanager" % "2.20.0",  // Secrets Manager SDK
+      "software.amazon.awssdk" % "sns" % "2.20.0",  // Secrets Manager SDK
 
       // ---- Misc
       "ch.qos.logback" % "logback-classic" % "1.4.6",
       "com.github.jwt-scala" %% "jwt-core" % "10.0.1",
       "com.github.jwt-scala" %% "jwt-core" % "10.0.1",
       "commons-net" % "commons-net" % "3.9.0",
+      "ch.qos.logback" % "logback-classic" % "1.4.6",
       "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-core" % "2.20.3",
       "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-macros" % "2.20.3" % "provided",
 
@@ -67,5 +69,21 @@ lazy val root = project
 
     scalacOptions ++= Seq(
       "-deprecation" // Enable warnings for deprecated APIs
+    ),
+
+    assembly / assemblyMergeStrategy := {
+      case "module-info.class" => MergeStrategy.discard
+      case PathList("META-INF", "services", xs @ _*) => MergeStrategy.concat
+      case PathList("META-INF", xs @ _*)             => MergeStrategy.discard
+      case "logback.xml"                             => MergeStrategy.first
+      case x                                         => (assembly / assemblyMergeStrategy).value(x)
+    },
+
+    inThisBuild(
+      List(
+        scalaVersion := scala3Version,
+        semanticdbEnabled := true,
+        semanticdbVersion := scalafixSemanticdb.revision
+      )
     )
   )

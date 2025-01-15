@@ -2,15 +2,16 @@ package co.blocke.bedrock
 package services
 package auth
 
-import aws.AwsEnvironment
+import scala.jdk.CollectionConverters.*
 
+import software.amazon.awssdk.services.secretsmanager.SecretsManagerClient
+import software.amazon.awssdk.services.secretsmanager.model.GetSecretValueRequest
+import software.amazon.awssdk.services.secretsmanager.model.GetSecretValueResponse
+import software.amazon.awssdk.services.secretsmanager.model.ListSecretVersionIdsRequest
 import zio.*
 import zio.http.*
-import software.amazon.awssdk.auth.credentials.{AwsBasicCredentials, DefaultCredentialsProvider, StaticCredentialsProvider}
-import software.amazon.awssdk.services.secretsmanager.SecretsManagerClient
-import software.amazon.awssdk.regions.Region
-import software.amazon.awssdk.services.secretsmanager.model.{GetSecretValueRequest, GetSecretValueResponse, ListSecretVersionIdsRequest}
-import scala.jdk.CollectionConverters.*
+
+import aws.AwsEnvironment
 
 
 /**
@@ -20,28 +21,17 @@ trait SecretKeyManager:
   def getSecretKey: ZIO[Any, Throwable, KeyBundle]
 
 
-final case class LiveSecretKeyManager(authConfig: AuthConfig, awsRegion: Option[Region]) extends SecretKeyManager:
+final case class LiveSecretKeyManager(authConfig: AuthConfig, awsEnv: AwsEnvironment) extends SecretKeyManager:
 
   def getSecretKey: ZIO[Any, Throwable, KeyBundle] = 
     for {
-      localstackUri <- ZIO
-        .attempt(new java.net.URI(authConfig.localstackUrl.get))  // ZZZ this is optional...treat accordingly
-
       outcome <- ZIO.attemptBlocking {
-          val (endpointOverride, credentialsProvider) = if !awsRegion.isDefined then 
-              // LocalStack configuration if no actual AWS is found
-              (
-                Some(localstackUri), // LocalStack endpoint
-                StaticCredentialsProvider.create(AwsBasicCredentials.create("foo", "bar")) // Mock credentials
-              )
-            else
-              // Non-local configuration, ie running on real AWS (uses default AWS credentials)
-              (None, DefaultCredentialsProvider.create())
+          val (endpointOverride, credentialsProvider) = awsEnv.getCreds
 
           val secretsClientBuilder = SecretsManagerClient.builder()
-            .region( awsRegion.getOrElse(Region.US_EAST_1) )
+            .region( awsEnv.getRegion )
             .credentialsProvider(credentialsProvider)
-          endpointOverride.map( secretsClientBuilder.endpointOverride )
+          endpointOverride.foreach(secretsClientBuilder.endpointOverride)
           val secretsClient = secretsClientBuilder.build()
           
           try {
@@ -94,6 +84,5 @@ object SecretKeyManager:
       for {
         authConfig <- ZIO.service[AuthConfig]
         awsEnv <- ZIO.service[AwsEnvironment]
-        region <- awsEnv.getRegion
-      } yield LiveSecretKeyManager(authConfig, region)
+      } yield LiveSecretKeyManager(authConfig, awsEnv)
     }

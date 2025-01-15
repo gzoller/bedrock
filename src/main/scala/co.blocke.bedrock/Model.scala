@@ -1,6 +1,7 @@
 package co.blocke.bedrock
 
-import zio.schema.{DeriveSchema, Schema}
+import zio.schema.DeriveSchema
+import zio.schema.Schema
 
 case class Book(title: String, authors: List[String], year: Int)
 
