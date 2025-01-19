@@ -20,7 +20,6 @@ import zio.schema.*
 import auth.*
 import db.BookRepo
 import zio.http.endpoint.AuthType.Bearer
-import zio.http.endpoint.AuthType.Bearer
 
 trait BookEndpoint:
   def routes: Routes[Any, Response]

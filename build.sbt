@@ -51,6 +51,7 @@ lazy val root = project
       "software.amazon.awssdk" % "sns" % "2.20.0",  // Secrets Manager SDK
 
       // ---- Misc
+      "org.scala-lang.modules" %% "scala-xml" % "2.3.0",
       "ch.qos.logback" % "logback-classic" % "1.4.6",
       "com.github.jwt-scala" %% "jwt-core" % "10.0.1",
       "com.github.jwt-scala" %% "jwt-core" % "10.0.1",
@@ -69,6 +70,11 @@ lazy val root = project
 
     scalacOptions ++= Seq(
       "-deprecation" // Enable warnings for deprecated APIs
+    ),
+
+    javaOptions ++= Seq(
+      "-Djava.net.preferIPv4Stack=true",
+      "-Djava.net.preferIPv6Addresses=false"
     ),
 
     assembly / assemblyMergeStrategy := {

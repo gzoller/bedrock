@@ -1,6 +1,7 @@
 package co.blocke.bedrock
 
 import co.blocke.bedrock.services.endpoint.AwsEventEndpoint
+import java.lang.System
 import zio.*
 import zio.http.*
 import zio.http.netty.*
@@ -19,8 +20,13 @@ object Main extends ZIOAppDefault {
     certPath = "server.crt",
     keyPath = "server.key"
   )
-  val serverConfig: Server.Config => zio.http.Server.Config = (config: Server.Config) => config.port(8073).ssl(sslConfig)
-  val serverLayer: ZLayer[Any, Nothing, Server] = Server.defaultWith(serverConfig).orDie
+  val secureServerConfig: Server.Config => zio.http.Server.Config = 
+    (config: Server.Config) => config.port(8443).ssl(sslConfig)
+  val unsecureServerConfig: Server.Config => zio.http.Server.Config = 
+    (config: Server.Config) => config.binding("0.0.0.0",8080)
+
+  val secureServerLayer: ZLayer[Any, Nothing, Server] = Server.defaultWith(secureServerConfig).orDie
+  val unsecureServerLayer: ZLayer[Any, Nothing, Server] = Server.defaultWith(unsecureServerConfig).orDie
 
   val clientLayer: ZLayer[Any, Throwable, Client] = ZLayer.make[Client](
     ZLayer.succeed(ZClient.Config.default.connectionTimeout(5.seconds)),
@@ -37,21 +43,49 @@ object Main extends ZIOAppDefault {
         bookEndpoint     <- ZIO.service[BookEndpoint]
         awsEventEndpoint <- ZIO.service[AwsEventEndpoint]
         awsEnv           <- ZIO.service[AwsEnvironment]
-        _                <- awsEnv.getAwsIPs  // retrieve valid AWS IP ranges
-        routes           =  bookEndpoint.routes ++ awsEventEndpoint.routes
+        _                <- awsEnv.getAwsIPs  // retrieve valid AWS IP ranges0
 
-        // Manage SNS topic for key rotation: subscribe on startup, unsubscribe on shutdown
-        // (we keep the snsArn b/c this is the full arn of the subscription, which is needed to unsubscribe)
-        snsArn           <- awsEventEndpoint.subscribeToTopic()
-        _                <- ZIO.addFinalizer(
-                              ZIO.logInfo("Unsubscribing from SNS topic...") *> 
-                              awsEventEndpoint.unsubscribeOnShutdown(snsArn))
+        // Start the server first
+        sslRoutes        = bookEndpoint.routes
+        nonsslRoutes     = awsEventEndpoint.routes
 
-        // Start the server with graceful interrupt handling
-        shutdownPromise  <- Promise.make[Nothing, Unit]
-        serverFiber      <- Server.serve(routes).fork
-        _                <- shutdownPromise.await.onInterrupt(serverFiber.interrupt)
+        // Promises for graceful shutdown
+        secureShutdownPromise    <- Promise.make[Nothing, Unit]
+        unsecureShutdownPromise  <- Promise.make[Nothing, Unit]
+
+        // Start the secure server
+        secureServerFiber <- Server.serve(sslRoutes)
+                              .provideLayer(secureServerLayer)
+                              .fork
+        _ <- ZIO.logInfo("Secure server started on port 8443.")
+
+        // Start the non-secure server
+        unsecureServerFiber <- Server.serve(nonsslRoutes)
+                                .provideLayer(unsecureServerLayer ++ Client.default ++ Scope.default)
+                                .fork
+        _ <- ZIO.logInfo("Non-secure server started on port 8080.")
+
+        // Ensure servers are running
+        // _ <- ZIO.logInfo("Let servers settle...")
+        // _ <- ZIO.sleep(3.seconds) // Allow time for servers to bind to their ports
+        // _ <- ZIO.logInfo("Servers settled.")
+
+        // Perform the SNS subscription after servers are running
+        _ <- awsEventEndpoint.subscribeToTopic()
+        _ <- ZIO.addFinalizer(
+              ZIO.logInfo("Unsubscribing from SNS topic...") *> 
+              awsEventEndpoint.unsubscribeOnShutdown
+            )
+
+        _ <- ZIO.logInfo("Application is running. Press Ctrl+C to exit.")
+        _ <- secureShutdownPromise.await
+              .zipPar(unsecureShutdownPromise.await)
+              .onInterrupt(secureServerFiber.interrupt *> unsecureServerFiber.interrupt)        
       } yield ()
+
+    // Set system properties to prefer IPv4 over IPv6 for compatibility
+    System.setProperty("java.net.preferIPv4Stack", "true")
+    System.setProperty("java.net.preferIPv6Addresses", "false")
 
     ZIO.scoped {
       // Share this one or else it is read multiple times due to being used in multiple layers
@@ -70,7 +104,7 @@ object Main extends ZIOAppDefault {
         AwsEventEndpoint.live
       )
 
-      program.provideSomeLayer(appLayer ++ serverLayer)
+      program.provideSomeLayer(appLayer ++ secureServerLayer ++ unsecureServerLayer)
     }.exitCode
   }
 }

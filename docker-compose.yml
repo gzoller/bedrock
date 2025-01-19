@@ -1,17 +1,20 @@
-version: "3.8"
+version: "4.0.3"
 
 services:
   localstack:
-    image: localstack/localstack:latest
-    container_name: localstack
+    container_name: "${LOCALSTACK_DOCKER_NAME:-localstack-main}"
+    image: localstack/localstack
     ports:
-      - "4566:4566"  # LocalStack Gateway (default)
-      - "4510-4559:4510-4559"  # Additional service-specific ports (optional)
+      - "127.0.0.1:4566:4566"            # LocalStack Gateway
+      - "127.0.0.1:4510-4559:4510-4559"  # external services port range
     environment:
-      - SERVICES=secretsmanager  # Specify which AWS services to mock
-      - DEBUG=1  # Enable debugging output (optional)
-      - DATA_DIR=/tmp/localstack/data  # Persistent storage for LocalStack state (optional)
-      - LAMBDA_EXECUTOR=docker  # Required for Lambda testing (if applicable)
+      # LocalStack configuration: https://docs.localstack.cloud/references/configuration/
+      - DEBUG=1
+      - LOG_LEVEL=trace
+      # - USE_SSL=1
+      #- SSL_CERT_FILE=/etc/ssl/certs/server.pem
     volumes:
-      - "./localstack-data:/tmp/localstack"  # Mount local directory for persistence
-      - "/var/run/docker.sock:/var/run/docker.sock"  # Required for Lambda execution
+      - "${LOCALSTACK_VOLUME_DIR:-./volume}:/var/lib/localstack"
+      - "/var/run/docker.sock:/var/run/docker.sock"
+
+      # - REQUESTS_CA_BUNDLE "/usr/local/share/ca-certificates/server.crt"
