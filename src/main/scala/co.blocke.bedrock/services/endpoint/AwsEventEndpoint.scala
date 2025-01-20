@@ -7,7 +7,6 @@ import software.amazon.awssdk.services.sns.model.*
 import zio.*
 import zio.http.*
 import zio.http.endpoint.Endpoint
-import zio.json.*
 
 import auth.Authentication
 import aws.AwsEnvironment
@@ -46,18 +45,14 @@ final case class LiveAwsEventEndpoint(auth: Authentication, awsConfig: AWSConfig
         val subscribeRequest = SubscribeRequest.builder()
           .topicArn(awsConfig.snsTopicArn)
           .attributes(Map("RawMessageDelivery" -> "true").asJava)
-          .protocol("http")
-          .endpoint("http://host.docker.internal:8080/sns-handler") // Update if necessary
-          // .endpoint("https://localhost:8073/sns-handler") // Update if necessary
-          // .endpoint("https://host.docker.internal:8073/sns-handler") // Update if necessary
-          // .endpoint("https://localhost.localstack.cloud:8073/sns-handler") // Update if necessary
+          .protocol("https")
+          .endpoint("https://host.docker.internal:8073/sns-handler") // Update if necessary
           .build()
 
         // Subscribe to the topic
         val subscribeResponse = snsClient.subscribe(subscribeRequest)
         val subscriptionArn = subscribeResponse.subscriptionArn()
 
-        ZIO.logInfo(s"Subscribed to SNS topic with ARN: $subscriptionArn")
         ()
       } catch {
         case e => 
@@ -134,7 +129,7 @@ final case class LiveAwsEventEndpoint(auth: Authentication, awsConfig: AWSConfig
     (for {
       verified <- verifySnsMessage(snsMsg.validationMap)
       _ <- if (verified) {
-            ZIO.logInfo("SNS message verified successfully.") // Proceed if verified
+            ZIO.logInfo("SNS message verified successfully.") 
           } else {
             ZIO.logFatal("SNS message verification failed.") *> ZIO.fail(new Exception("Invalid SNS message signature"))
           }
@@ -145,7 +140,6 @@ final case class LiveAwsEventEndpoint(auth: Authentication, awsConfig: AWSConfig
                     )
                   }
       body     <- response.body.asString      // Get the response body as a string
-      _        <- ZIO.logInfo(s"Subscription confirmation response: $body")
       xml      = XML.loadString(body)         // Parse the XML response
       arn      <- ZIO
                     .fromOption((xml \\ "SubscriptionArn").headOption.map(_.text))
@@ -221,14 +215,37 @@ object AwsEventEndpoint:
       } yield LiveAwsEventEndpoint(auth, awsConfig, awsEnv)
     }
   }
-  
 
 
-  /*  LAMBDA ISSUES:
+  /* 
   
+aws secretsmanager rotate-secret \
+    --region us-east-1 \
+    --endpoint-url http://localhost:4566 \
+    --secret-id MySecretKey \
+    --rotation-lambda-arn arn:aws:lambda:us-east-1:000000000000:function:RotateSecretFunction \
+    --rotation-rules AutomaticallyAfterDays=30 
 
- Lambda functions are created and updated asynchronously in the new lambda provider like in AWS. Before invoking NotifySecretChange, please wait until the function transitioned from the state Pending to Active using: "awslocal lambda wait function-active-v2 --function-name NotifySecretChange" Check out https://docs.localstack.cloud/user-guide/aws/lambda/#function-in-pending-state
-2025-01-17T04:55:00.906 DEBUG --- [et.reactor-0] l.s.s.provider             : An exception (An error occurred (ResourceConflictException) when calling the Invoke operation: The operation cannot be performed at this time. The function is currently in the following state: Pending) has occurred in arn:aws:lambda:us-east-1:000000000000:function:NotifySecretChange
-2025-01-17T04:55:00.906  WARN --- [et.reactor-0] l.aws.protocol.serializer  : Response object RotateSecretResponse contains a member which is not specified: ResponseMetadata
-  
+aws secretsmanager update-secret \
+    --endpoint-url=http://localhost:4566 \
+    --secret-id MySecretKey \
+    --secret-string "newSecretString" \
+    --region us-east-1
+
+aws secretsmanager describe-secret \
+    --secret-id MySecretKey \
+    --endpoint-url=http://localhost:4566 \
+    --region us-east-1
+
+
+aws events put-events \
+    --endpoint-url=$AWS_ENDPOINT_URL \
+    --entries '[
+        {
+            "Source": "aws.secretsmanager",
+            "DetailType": "AWS API Call via CloudTrail",
+            "Detail": "{\"eventName\":\"RotateSecret\",\"requestParameters\":{\"secretId\":\"MySecretKey\"}}",
+            "EventBusName": "default"
+        }
+    ]'    
    */

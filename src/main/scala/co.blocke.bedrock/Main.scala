@@ -21,12 +21,9 @@ object Main extends ZIOAppDefault {
     keyPath = "server.key"
   )
   val secureServerConfig: Server.Config => zio.http.Server.Config = 
-    (config: Server.Config) => config.port(8443).ssl(sslConfig)
-  val unsecureServerConfig: Server.Config => zio.http.Server.Config = 
-    (config: Server.Config) => config.binding("0.0.0.0",8080)
+    (config: Server.Config) => config.port(8073).ssl(sslConfig)
 
-  val secureServerLayer: ZLayer[Any, Nothing, Server] = Server.defaultWith(secureServerConfig).orDie
-  val unsecureServerLayer: ZLayer[Any, Nothing, Server] = Server.defaultWith(unsecureServerConfig).orDie
+  val serverLayer: ZLayer[Any, Nothing, Server] = Server.defaultWith(secureServerConfig).orDie
 
   val clientLayer: ZLayer[Any, Throwable, Client] = ZLayer.make[Client](
     ZLayer.succeed(ZClient.Config.default.connectionTimeout(5.seconds)),
@@ -46,31 +43,12 @@ object Main extends ZIOAppDefault {
         _                <- awsEnv.getAwsIPs  // retrieve valid AWS IP ranges0
 
         // Start the server first
-        sslRoutes        = bookEndpoint.routes
-        nonsslRoutes     = awsEventEndpoint.routes
-
-        // Promises for graceful shutdown
-        secureShutdownPromise    <- Promise.make[Nothing, Unit]
-        unsecureShutdownPromise  <- Promise.make[Nothing, Unit]
-
-        // Start the secure server
-        secureServerFiber <- Server.serve(sslRoutes)
-                              .provideLayer(secureServerLayer)
-                              .fork
+        routes        = bookEndpoint.routes ++ awsEventEndpoint.routes
+        shutdownPromise    <- Promise.make[Nothing, Unit] // Promises for graceful shutdown
+        serverFiber <- Server.serve(routes).fork          // Start the secure server
         _ <- ZIO.logInfo("Secure server started on port 8443.")
 
-        // Start the non-secure server
-        unsecureServerFiber <- Server.serve(nonsslRoutes)
-                                .provideLayer(unsecureServerLayer ++ Client.default ++ Scope.default)
-                                .fork
-        _ <- ZIO.logInfo("Non-secure server started on port 8080.")
-
-        // Ensure servers are running
-        // _ <- ZIO.logInfo("Let servers settle...")
-        // _ <- ZIO.sleep(3.seconds) // Allow time for servers to bind to their ports
-        // _ <- ZIO.logInfo("Servers settled.")
-
-        // Perform the SNS subscription after servers are running
+        // SNS subscription after servers are running
         _ <- awsEventEndpoint.subscribeToTopic()
         _ <- ZIO.addFinalizer(
               ZIO.logInfo("Unsubscribing from SNS topic...") *> 
@@ -78,9 +56,7 @@ object Main extends ZIOAppDefault {
             )
 
         _ <- ZIO.logInfo("Application is running. Press Ctrl+C to exit.")
-        _ <- secureShutdownPromise.await
-              .zipPar(unsecureShutdownPromise.await)
-              .onInterrupt(secureServerFiber.interrupt *> unsecureServerFiber.interrupt)        
+        _ <- shutdownPromise.await.onInterrupt(serverFiber.interrupt)
       } yield ()
 
     // Set system properties to prefer IPv4 over IPv6 for compatibility
@@ -104,7 +80,7 @@ object Main extends ZIOAppDefault {
         AwsEventEndpoint.live
       )
 
-      program.provideSomeLayer(appLayer ++ secureServerLayer ++ unsecureServerLayer)
+      program.provideSomeLayer[Scope](appLayer ++ serverLayer ++ clientLayer)
     }.exitCode
   }
 }

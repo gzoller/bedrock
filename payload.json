@@ -1,0 +1,5 @@
+{
+    "Step": "createSecret",
+    "SecretId": "MySecretKey",
+    "ClientRequestToken": "44cc6950-f120-431d-9db4-15729a0edd50"
+}

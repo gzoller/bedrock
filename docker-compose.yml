@@ -9,12 +9,9 @@ services:
       - "127.0.0.1:4510-4559:4510-4559"  # external services port range
     environment:
       # LocalStack configuration: https://docs.localstack.cloud/references/configuration/
+      - LOCALSTACK_AUTH_TOKEN=${LOCALSTACK_AUTH_TOKEN- }
       - DEBUG=1
       - LOG_LEVEL=trace
-      # - USE_SSL=1
-      #- SSL_CERT_FILE=/etc/ssl/certs/server.pem
     volumes:
       - "${LOCALSTACK_VOLUME_DIR:-./volume}:/var/lib/localstack"
       - "/var/run/docker.sock:/var/run/docker.sock"
-
-      # - REQUESTS_CA_BUNDLE "/usr/local/share/ca-certificates/server.crt"
