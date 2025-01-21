@@ -11,7 +11,7 @@ case class AuthConfig(
     tokenExpirationSec: Int,
     refreshWindowSec: Int,
     sessionDurationSec: Int,
-    secretName: String,
+    tokenSecretName: String,
     sessionSecretName: String
 )
 

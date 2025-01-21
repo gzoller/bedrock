@@ -5,6 +5,7 @@ import boto3
 import logging
 import os
 import uuid
+import json
 
 logger = logging.getLogger()
 logger.setLevel(logging.INFO)
@@ -36,7 +37,7 @@ def lambda_handler(event, context):
     step = event['Step']
 
     # Setup the client
-    service_client = boto3.client('secretsmanager')  #, endpoint_url=os.environ['SECRETS_MANAGER_ENDPOINT'])
+    service_client = boto3.client('secretsmanager')
 
     # Make sure the version is staged correctly
     metadata = service_client.describe_secret(SecretId=arn)
@@ -138,3 +139,20 @@ def finish_secret(service_client, arn, token):
     # Finalize by staging the secret version current
     service_client.update_secret_version_stage(SecretId=arn, VersionStage="AWSCURRENT", MoveToVersionId=token, RemoveFromVersionId=current_version)
     logger.info("finishSecret: Successfully set AWSCURRENT stage to version %s for secret %s." % (token, arn))
+
+    # Now we can notify SNS that the secret was rotated so it can tell subscribers
+    sns_client = boto3.client('sns')
+    SNS_TOPIC_ARN = os.getenv("SNS_TOPIC_ARN") # Environment variable for the SNS Topic ARN
+    message = {
+      "Type": "Notification",
+      "Message": "Time to refresh keys"
+    }
+    try:
+        response = sns_client.publish(
+            TopicArn=SNS_TOPIC_ARN,
+            Message=json.dumps(message),  # Send the message as JSON
+            Subject=f"Secrets Manager Change: rotation"
+        )
+        logger.info(f"!!!!! Message published to SNS: {response}")
+    except Exception as e:
+        logger.error(f"!!!!! Error publishing to SNS: {str(e)}")

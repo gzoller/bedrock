@@ -25,7 +25,7 @@ final case class LiveSecretKeyManager(authConfig: AuthConfig, awsEnv: AwsEnviron
 
   def getSecretKey: ZIO[Any, Throwable, KeyBundle] = 
     for {
-      outcome <- ZIO.attemptBlocking {
+      keyBundle <- ZIO.attemptBlocking {
           val (endpointOverride, credentialsProvider) = awsEnv.getCreds
 
           val secretsClientBuilder = SecretsManagerClient.builder()
@@ -35,47 +35,46 @@ final case class LiveSecretKeyManager(authConfig: AuthConfig, awsEnv: AwsEnviron
           val secretsClient = secretsClientBuilder.build()
           
           try {
-            val versionsRequest = ListSecretVersionIdsRequest.builder()
-              .secretId(authConfig.secretName)
-              .build()
-            val versionsResponse = secretsClient.listSecretVersionIds(versionsRequest)
-            val currentVersion = versionsResponse.versions.asScala.find(_.versionStages.contains("AWSCURRENT")).map(_.versionId)
-              .getOrElse(throw new Exception("No current version found for secret")) // There must be a current version!
-            val previousVersion = versionsResponse.versions.asScala.find(_.versionStages.contains("AWSPREVIOUS")).map(_.versionId)
-            // There may or may not be a previous version.
-
-            def getSecret(secretName: String, ver: Option[String]): Key = {
+            def getSecret(secretName: String, version: String): Key = {
               val getSecretValueRequestRaw = GetSecretValueRequest.builder()
                 .secretId(secretName)
-              val getSecretValueRequest = 
-                ver
-                  .map( v => getSecretValueRequestRaw.versionId(v).build() )
-                  .getOrElse( getSecretValueRequestRaw.build() )
+              val getSecretValueRequest = getSecretValueRequestRaw.versionId(version).build()
 
               // Fetch the secret value
               val getSecretValueResponse: GetSecretValueResponse = secretsClient.getSecretValue(getSecretValueRequest)
 
               // Return the secret string
-              Key(currentVersion, getSecretValueResponse.secretString(), getSecretValueResponse.createdDate)
+              Key(version, getSecretValueResponse.secretString(), getSecretValueResponse.createdDate)
             }
-            
-            // Retreive the current version of the key
-            val currentSecret = getSecret(authConfig.secretName, Some(currentVersion))
 
-            // Retreive the previous version of the key
-            val previousSecret = previousVersion.map{ prevVer => 
-              getSecret(authConfig.secretName, Some(prevVer))
-              }
+            def getVersion(secretName: String, stage: String): Option[String] = {
+              val versionsRequest = ListSecretVersionIdsRequest.builder()
+                .secretId(secretName)
+                .build()
+              val versionsResponse = secretsClient.listSecretVersionIds(versionsRequest)
+              versionsResponse.versions.asScala.find(_.versionStages.contains(stage)).map(_.versionId)
+            }
 
-            val sesssionSecret = getSecret(authConfig.sessionSecretName, None)
+            // Token Secret Versions
+            val curTokenVersion = getVersion(authConfig.tokenSecretName, "AWSCURRENT")
+              .getOrElse(throw new Exception("No current version found for token secret")) // There must be a current version!
+            val prevTokenVersion = getVersion(authConfig.tokenSecretName, "AWSPREVIOUS")
+            // There may or may not be a previous version.
+            val curSessionVersion = getVersion(authConfig.sessionSecretName, "AWSCURRENT")
+              .getOrElse(throw new Exception("No current version found for session secret")) // There must be a current version!
 
-            KeyBundle(currentSecret, previousSecret, sesssionSecret)
+            // Retreive the secret keys
+            val curTokenSecretKey = getSecret(authConfig.tokenSecretName, curTokenVersion)
+            val prevTokenSecretKey = prevTokenVersion.map( getSecret(authConfig.tokenSecretName, _) )
+            val sesssionSecretKey = getSecret(authConfig.sessionSecretName, curSessionVersion)
+
+            KeyBundle(curTokenSecretKey, prevTokenSecretKey, sesssionSecretKey)
           } finally {
               secretsClient.close()
           }
         }
-      _ <- ZIO.logInfo("Loaded secret keys")
-    } yield (outcome)
+      _ <- ZIO.logInfo(s"Keys updated: (${keyBundle.currentTokenKey}, ${keyBundle.previousTokenKey.getOrElse("None")}, ${keyBundle.sessionKey})")
+    } yield (keyBundle)
 
 
 object SecretKeyManager:

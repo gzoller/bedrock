@@ -31,7 +31,6 @@ final case class LiveAuthentication(
   def updateKeys: ZIO[Any, Throwable, Unit] =
     for {
       keyBundleLive <- secretKeyManager.getSecretKey
-      _ <- ZIO.logInfo(s"New keys loaded: (${keyBundle.currentTokenKey}, ${keyBundle.previousTokenKey.getOrElse("None")}, ${keyBundle.sessionKey})")
     } yield {
       keyBundle = keyBundleLive
     }

@@ -226,26 +226,9 @@ aws secretsmanager rotate-secret \
     --rotation-lambda-arn arn:aws:lambda:us-east-1:000000000000:function:RotateSecretFunction \
     --rotation-rules AutomaticallyAfterDays=30 
 
-aws secretsmanager update-secret \
-    --endpoint-url=http://localhost:4566 \
-    --secret-id MySecretKey \
-    --secret-string "newSecretString" \
-    --region us-east-1
-
 aws secretsmanager describe-secret \
     --secret-id MySecretKey \
     --endpoint-url=http://localhost:4566 \
     --region us-east-1
 
-
-aws events put-events \
-    --endpoint-url=$AWS_ENDPOINT_URL \
-    --entries '[
-        {
-            "Source": "aws.secretsmanager",
-            "DetailType": "AWS API Call via CloudTrail",
-            "Detail": "{\"eventName\":\"RotateSecret\",\"requestParameters\":{\"secretId\":\"MySecretKey\"}}",
-            "EventBusName": "default"
-        }
-    ]'    
    */
