@@ -37,12 +37,12 @@ The diagram below shows how key rotation would work in AWS:
 >NOTE: All The AWS services, lambda functions, etc. must be configured by you in AWS. They are not automatically provided by the Bedrock framework, but are presumed to be present.
 
 There are a number of moving pieces here. When Secrets Manager triggers key auto-rotation, a lambda function you
-provide will be kicked off. We suggest a simple function that just creates a new random UUID string, but it can
+provide will be kicked off. The provided lambda function, rotationLambda.py creates a new random UUID string, but it can
 be whatever you want or regulations require. The new key is then Stored in Secrets Manager, which versions
-the keys (this is important!). When the Secrets Manager changes the key's value, AWS Eventbridge can be used to 
-trigger an event that a new key is available. EventBridge will be configured to post an event to a configured
+the keys (this is important!). The lambda then sends a message to an SNS topic, which in turn 
+trigger an event that a new key is available. EventBridge will be configured to posts an event to a configured
 topic in SNS. Each server, when it starts up, will subscribe to this topic. When this topic in SNS receives an event,
-it will be propagated to each server's /rotate-secret endpoint, which will trigger the server to re-read the
+propagates to each server's /sns-handler endpoint, which will then trigger each server to re-read the
 Secret Keys from Secrets Manager. 
 
 ## Bearer Tokens

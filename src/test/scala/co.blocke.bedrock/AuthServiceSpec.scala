@@ -17,8 +17,6 @@ import izumi.reflect.Tag
   */
 object AuthServiceSpec extends ZIOSpecDefault {
 
-  // implicit val clock: Clock = Clock.systemUTC
-
   val bookRepoMock: BookRepo = new BookRepo {
     override def find(query: String): List[Book] = 
       if query == "zio" then        

@@ -19,7 +19,8 @@ case class AWSConfig(
     snsTopicArn: String,
     regionUrl: URL,
     ipRangesUrl: URL,
-    localstackUrl: Option[String]  // this is a string b/c ultimately its parsed into a URI
+    localstackUrl: Option[String],  // this is a string b/c ultimately its parsed into a URI
+    callbackBaseUrl: String
 )
 
 object AppConfig:

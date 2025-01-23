@@ -46,12 +46,13 @@ final case class LiveAwsEventEndpoint(auth: Authentication, awsConfig: AWSConfig
           .topicArn(awsConfig.snsTopicArn)
           .attributes(Map("RawMessageDelivery" -> "true").asJava)
           .protocol("https")
-          .endpoint("https://host.docker.internal:8073/sns-handler") // Update if necessary
+          .endpoint(awsConfig.callbackBaseUrl + "/sns-handler") // Update if necessary
           .build()
 
         // Subscribe to the topic
         val subscribeResponse = snsClient.subscribe(subscribeRequest)
-        val subscriptionArn = subscribeResponse.subscriptionArn()
+        val foo = subscribeResponse.subscriptionArn()
+        ZIO.logInfo("!!!!!!! Subscribed to SNS topic (foo): "+foo)
 
         ()
       } catch {
@@ -144,7 +145,10 @@ final case class LiveAwsEventEndpoint(auth: Authentication, awsConfig: AWSConfig
       arn      <- ZIO
                     .fromOption((xml \\ "SubscriptionArn").headOption.map(_.text))
                     .orElseFail(new RuntimeException("SubscriptionArn not found in response"))
-      snsSubscriptionArn = arn
+      _        <- ZIO.logInfo(s"SubscriptionArn: $arn")
+      _        <- ZIO.succeed {
+                  snsSubscriptionArn = arn
+                }
 
       _ <- if response.status.isSuccess then
             ZIO.logInfo(s"Confirmed subscription: ${response}")
@@ -215,20 +219,3 @@ object AwsEventEndpoint:
       } yield LiveAwsEventEndpoint(auth, awsConfig, awsEnv)
     }
   }
-
-
-  /* 
-  
-aws secretsmanager rotate-secret \
-    --region us-east-1 \
-    --endpoint-url http://localhost:4566 \
-    --secret-id MySecretKey \
-    --rotation-lambda-arn arn:aws:lambda:us-east-1:000000000000:function:RotateSecretFunction \
-    --rotation-rules AutomaticallyAfterDays=30 
-
-aws secretsmanager describe-secret \
-    --secret-id MySecretKey \
-    --endpoint-url=http://localhost:4566 \
-    --region us-east-1
-
-   */

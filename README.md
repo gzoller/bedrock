@@ -11,14 +11,12 @@ Starting point for REST service
 * [HTTPS Support](docs/https.md)
 * [Auth using tokens (endpoint protection) incl rotating keys and tokens)](docs/security.md)
 * Get access to the encoded user id from jtw token in handler
+* LocalStack support for running locally and integration testing
 
 IN-PROGRESS:
 * Figure out how to do integration testing in sbt
 * Separate unit and integration tests with mocks for unit
-* Figure out secret key rotation:
-   - retrieve versioned keys (current/previous) DONE
-   - figure out how to handle transition period where 2 keys are valid at the same time for a short defined window - NEEDS TESTING
-   - using a config setting, determine when to re-gen a new bearer token prior to expiration, eg 7 min expiration, so re-gen at 2 min before - NEEDS TESTING
+* Refactor--don't like AWS code scattered about
 
 DEPLOYMENT/AWS:
 * Configure logback to send logs to CloudWatch. May need templated config files to do this.
@@ -27,7 +25,7 @@ TODO:
 * Auto-generate Swagger config (fixed with my own mods to ZIO HTTP...PR pending)
 * Hide server.crt/server.key files but ensure they're published & packaged correctly
 * Figure out OAuth
-* Figure out packaging (Docker)
+* Figure out packaging (Docker, versioning, deployment, local/AWS)
 * Figure out Kuberneties
 * Figure out Teraform
 * Figure out monitoring

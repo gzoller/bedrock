@@ -1,10 +1,13 @@
-import sbtassembly.AssemblyPlugin.autoImport._
+import sbtassembly.AssemblyPlugin.autoImport.*
+import scala.sys.process.*
+
 enablePlugins(BuildInfoPlugin)
+enablePlugins(DockerPlugin)
+enablePlugins(JavaAppPackaging)
 
 val scala3Version = "3.5.2"
 
-lazy val root = project
-  .in(file("."))
+lazy val root = (project in file("."))
   .settings(
     name := "bedrock",
     version := "0.1.0-SNAPSHOT",
@@ -22,6 +25,7 @@ lazy val root = project
     // TODO: Use a better assembler-packager like sbt-native-packager
     assembly / assemblyMergeStrategy := {
       {
+        case "module-info.class" => MergeStrategy.discard
         case PathList("META-INF", xs @ _*) => MergeStrategy.discard
         case PathList("reference.conf")    => MergeStrategy.concat
         case x =>
@@ -29,6 +33,13 @@ lazy val root = project
           oldStrategy(x)
       }
     },
+
+    // assembly / assemblyMergeStrategy := {
+    //   case PathList("META-INF", "services", xs @ _*) => MergeStrategy.concat
+    //   case PathList("META-INF", xs @ _*)             => MergeStrategy.discard
+    //   case "logback.xml"                             => MergeStrategy.first
+    //   case x                                         => (assembly / assemblyMergeStrategy).value(x)
+    // },
 
     ThisBuild / scalacOptions ++= Seq(
       "-Wunused:imports", // Warn on unused imports
@@ -61,7 +72,7 @@ lazy val root = project
       "com.github.plokhotnyuk.jsoniter-scala" %% "jsoniter-scala-macros" % "2.20.3" % "provided",
 
       // ---- Testing
-      "org.scalameta" %% "munit" % "1.0.0" % Test,
+      // "org.scalameta" %% "munit" % "1.0.0" % Test,
       "dev.zio" %% "zio-test" % "2.1.12" % Test,
       "dev.zio" %% "zio-test-sbt" % "2.1.12" % Test,
       "dev.zio" %% "zio-http-testkit" % "3.0.1" % Test
@@ -72,24 +83,43 @@ lazy val root = project
       "-deprecation" // Enable warnings for deprecated APIs
     ),
 
-    javaOptions ++= Seq(
-      "-Djava.net.preferIPv4Stack=true",
-      "-Djava.net.preferIPv6Addresses=false"
-    ),
-
-    assembly / assemblyMergeStrategy := {
-      case "module-info.class" => MergeStrategy.discard
-      case PathList("META-INF", "services", xs @ _*) => MergeStrategy.concat
-      case PathList("META-INF", xs @ _*)             => MergeStrategy.discard
-      case "logback.xml"                             => MergeStrategy.first
-      case x                                         => (assembly / assemblyMergeStrategy).value(x)
-    },
-
-    inThisBuild(
-      List(
-        scalaVersion := scala3Version,
-        semanticdbEnabled := true,
-        semanticdbVersion := scalafixSemanticdb.revision
-      )
-    )
+    // Docker packaging settings
+    dockerExposedPorts += 8073,
+    dockerBaseImage := "openjdk:22",
   )
+  
+// Integration test subproject
+// > sbt integrationTests/compile
+// > sbt integrationTests/test
+lazy val integrationTests = (project in file("it"))
+  .settings(
+    name := "IntegrationTests",
+    scalaVersion := "3.5.2",
+    libraryDependencies ++= Seq(
+      "dev.zio" %% "zio" % "2.1.12",
+      "dev.zio" %% "zio-test" % "2.1.12",
+      "dev.zio" %% "zio-test-sbt" % "2.1.12"
+    ),
+    testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework"),
+
+    // Proper lazy evaluation for test execution
+    Test / test := Def.taskDyn {
+      val startLocalStack = Process("./scripts/aws_local_start.sh").!(ProcessLogger(println, System.err.println))
+      if (startLocalStack != 0) {
+        sys.error("Failed to start LocalStack.")
+      }
+
+      // Create a new task to run the tests after LocalStack setup
+      Def.task {
+        try {
+          (Test / executeTests).value // Run tests lazily after setup
+        } finally {
+          val stopLocalStack = Process("docker-compose down").!(ProcessLogger(println, System.err.println))
+          if (stopLocalStack != 0) {
+            sys.error("Failed to stop LocalStack.")
+          }
+        }
+      }
+    }.value
+  )
+  .dependsOn(root)

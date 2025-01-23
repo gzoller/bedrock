@@ -1,7 +1,6 @@
 package co.blocke.bedrock
 
 import co.blocke.bedrock.services.endpoint.AwsEventEndpoint
-import java.lang.System
 import zio.*
 import zio.http.*
 import zio.http.netty.*
@@ -33,35 +32,36 @@ object Main extends ZIOAppDefault {
     ZLayer.succeed(NettyConfig.defaultWithFastShutdown)
   )
 
+  val program =
+    for {
+      _                <- ZIO.logInfo("Loading BookEndpoint service")
+      bookEndpoint     <- ZIO.service[BookEndpoint]
+      _                <- ZIO.logInfo("Loading AwsEventEndpoint service")
+      awsEventEndpoint <- ZIO.service[AwsEventEndpoint]
+
+      // Start the server first
+      _                <- ZIO.logInfo("Setting routes")
+      routes           =  bookEndpoint.routes ++ awsEventEndpoint.routes
+      shutdownPromise  <- Promise.make[Nothing, Unit] // Promises for graceful shutdown
+      _                <- ZIO.logInfo("Starting server...")
+      serverFiber      <- Server.serve(routes).fork        // Start the secure server
+      _                <- ZIO.logInfo("Secure server started on port 8443.")
+
+      // SNS subscription after servers are running
+      _                <- awsEventEndpoint.subscribeToTopic()
+      _                <- ZIO.addFinalizer(
+                            ZIO.logInfo("Unsubscribing from SNS topic...") *> 
+                            awsEventEndpoint.unsubscribeOnShutdown
+                          )
+
+      _                <- ZIO.logInfo("Application is running. Press Ctrl+C to exit.")
+      _                <- ZIO.interruptible {
+                          shutdownPromise.await
+                            .onInterrupt(ZIO.logInfo("Shutdown signal received.") *> serverFiber.interrupt)
+                        }
+    } yield ()
+
   override def run: URIO[Any, ExitCode] = {
-
-    val program =
-      for {
-        bookEndpoint     <- ZIO.service[BookEndpoint]
-        awsEventEndpoint <- ZIO.service[AwsEventEndpoint]
-        awsEnv           <- ZIO.service[AwsEnvironment]
-        _                <- awsEnv.getAwsIPs  // retrieve valid AWS IP ranges0
-
-        // Start the server first
-        routes        = bookEndpoint.routes ++ awsEventEndpoint.routes
-        shutdownPromise    <- Promise.make[Nothing, Unit] // Promises for graceful shutdown
-        serverFiber <- Server.serve(routes).fork          // Start the secure server
-        _ <- ZIO.logInfo("Secure server started on port 8443.")
-
-        // SNS subscription after servers are running
-        _ <- awsEventEndpoint.subscribeToTopic()
-        _ <- ZIO.addFinalizer(
-              ZIO.logInfo("Unsubscribing from SNS topic...") *> 
-              awsEventEndpoint.unsubscribeOnShutdown
-            )
-
-        _ <- ZIO.logInfo("Application is running. Press Ctrl+C to exit.")
-        _ <- shutdownPromise.await.onInterrupt(serverFiber.interrupt)
-      } yield ()
-
-    // Set system properties to prefer IPv4 over IPv6 for compatibility
-    System.setProperty("java.net.preferIPv4Stack", "true")
-    System.setProperty("java.net.preferIPv6Addresses", "false")
 
     ZIO.scoped {
       // Share this one or else it is read multiple times due to being used in multiple layers
@@ -69,7 +69,7 @@ object Main extends ZIOAppDefault {
 
       // make here magically sews together all the dependencies for the program.
       // MUCH easier than doing it manually!
-      val appLayer = ZLayer.make[BookEndpoint & AwsEventEndpoint & AwsEnvironment & Client](
+      val appLayer = ZLayer.make[BookEndpoint & AwsEventEndpoint & Client](
         clientLayer,
         sharedAppConfig,
         Authentication.live,
@@ -81,10 +81,20 @@ object Main extends ZIOAppDefault {
       )
 
       program.provideSomeLayer[Scope](appLayer ++ serverLayer ++ clientLayer)
+
     }.exitCode
   }
 }
 
-// TODO: 2 problems
-// 1. All the layers are being executed twice
-// 2. Not working!
+
+/* 
+acquireRelease pattern for graceful shutdown--may be old approach
+
+val serverLayer: ZLayer[Any, Nothing, Server] = ZLayer.scoped {
+  ZIO.acquireRelease(
+    for {
+      server <- Server.start(8080, app) // Start the server
+    } yield server
+  )(server => server.stop) // Gracefully stop the server
+}
+ */

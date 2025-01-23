@@ -145,9 +145,14 @@ object Authentication:
   def live: ZLayer[AuthConfig & SecretKeyManager, Throwable, Authentication] =
     ZLayer.fromZIO {
       for {
+        _               <- ZIO.logInfo("Authentication: Loading SecretKeyManager")
         manager         <- ZIO.service[SecretKeyManager]
+        _               <- ZIO.logInfo("Authentication: Loading AuthConfig")
         authConfig      <- ZIO.service[AuthConfig]
+        _               <- ZIO.logInfo("Authentication: Loading Clock")
         clock           <- ZIO.clock
-        keyBundle       <- manager.getSecretKey
+        _               <- ZIO.logInfo("Authentication: Getting secret keys")
+        keyBundle       <- manager.getSecretKey.tapError(e => ZIO.logError("Authentication ERROR: "+e.getMessage))
+        _               <- ZIO.logInfo("Authentication: Creating LiveAuthentication")
       } yield LiveAuthentication(authConfig, clock, manager, keyBundle)
     }

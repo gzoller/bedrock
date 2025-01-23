@@ -1,0 +1,23 @@
+
+// Establish credentials
+
+export AWS_ACCESS_KEY_ID=test
+export AWS_SECRET_ACCESS_KEY=test
+
+
+// List SNS subscriptions
+aws sns list-subscriptions --endpoint-url http://localhost:4566
+
+// Force rotation of secret
+aws secretsmanager rotate-secret \
+    --region us-east-1 \
+    --endpoint-url http://localhost:4566 \
+    --secret-id MySecretKey \
+    --rotation-lambda-arn arn:aws:lambda:us-east-1:000000000000:function:RotateSecretFunction \
+    --rotation-rules AutomaticallyAfterDays=30 
+
+// Show secret
+aws secretsmanager describe-secret \
+    --secret-id MySecretKey \
+    --endpoint-url=http://localhost:4566 \
+    --region us-east-1

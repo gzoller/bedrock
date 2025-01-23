@@ -27,7 +27,4 @@ subjectAltName = @alt_names
 [alt_names]
 DNS.1 = localhost
 DNS.2 = host.docker.internal
-DNS.3 = bedrock
-DNS.4 = localstack
-DNS.5 = localhost.localstack.cloud
-IP.1 = 127.0.0.1
+DNS.3 = localhost.localstack.cloud

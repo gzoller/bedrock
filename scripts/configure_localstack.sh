@@ -6,32 +6,11 @@ GREEN='\033[0;32m'
 YELLOW='\033[1;33m'
 NC='\033[0m' # No Color
 
-docker-compose up -d
-sleep 2
-echo -e "Starting Docker containers... ${GREEN}Success${NC}"
-
-CERT_PATH="src/main/resources/server.crt"
-CONTAINER_ID=$(docker ps --filter "name=localstack" --format "{{.ID}}")
-echo -e "    >> Container ID: ${YELLOW}$CONTAINER_ID${NC}"
-# Check if LocalStack is running
-if [ -z "$CONTAINER_ID" ]; then
-  echo -e "${RED}LocalStack container is not running. Exiting.${NC}"
-  exit 1
-fi
-
-# Copy the certificate into the container
-docker cp "$CERT_PATH" "$CONTAINER_ID:/usr/local/share/ca-certificates/server.crt"
-
-# Update the trusted certificates in the container
-docker exec -it "$CONTAINER_ID" update-ca-certificates
-
-echo -e "Add security certificates to LocalStack container... ${GREEN}Success${NC}"
-
 # Set up dummy AWS credentials and region
 export AWS_ACCESS_KEY_ID=test
 export AWS_SECRET_ACCESS_KEY=test
 export AWS_DEFAULT_REGION=us-east-1
-export AWS_ENDPOINT_URL=http://localhost:4566
+export AWS_ENDPOINT_URL=http://localstack:4566
 
 # Prime Secrets Manager
 aws --endpoint-url=$AWS_ENDPOINT_URL secretsmanager create-secret \
@@ -131,7 +110,7 @@ ROTATION_LAMBDA_ARN=$(aws lambda create-function \
     --role "$ROLE_ARN" \
     --handler rotationLambda.lambda_handler \
     --environment Variables={SNS_TOPIC_ARN=$SNS_TOPIC_ARN} \
-    --zip-file fileb://scripts/rotationLambda.zip \
+    --zip-file fileb:///scripts/rotationLambda.zip \
     --query "FunctionArn" --output text)
 aws --endpoint-url $AWS_ENDPOINT_URL lambda wait function-active-v2 --function-name RotateSecretFunction  
 aws lambda add-permission \

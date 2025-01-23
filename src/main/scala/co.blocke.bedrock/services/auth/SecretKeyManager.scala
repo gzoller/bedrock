@@ -81,7 +81,10 @@ object SecretKeyManager:
   def live: ZLayer[AuthConfig & Client & AwsEnvironment, Throwable, SecretKeyManager] =
     ZLayer.fromZIO {
       for {
+        _                <- ZIO.logInfo("SecretKeyManager: Loading AuthConfig")
         authConfig <- ZIO.service[AuthConfig]
+        _                <- ZIO.logInfo("SecretKeyManager: Loading AwsEnvironment")
         awsEnv <- ZIO.service[AwsEnvironment]
+        _                <- ZIO.logInfo("SecretKeyManager: Creating LiveSecretKeyManager")
       } yield LiveSecretKeyManager(authConfig, awsEnv)
     }

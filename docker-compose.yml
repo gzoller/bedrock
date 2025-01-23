@@ -1,17 +1,49 @@
 version: "4.0.3"
 
+networks:
+  great-network:
+    driver: bridge
+
 services:
   localstack:
-    container_name: "${LOCALSTACK_DOCKER_NAME:-localstack-main}"
     image: localstack/localstack
     ports:
-      - "127.0.0.1:4566:4566"            # LocalStack Gateway
-      - "127.0.0.1:4510-4559:4510-4559"  # external services port range
-    environment:
-      # LocalStack configuration: https://docs.localstack.cloud/references/configuration/
-      - LOCALSTACK_AUTH_TOKEN=${LOCALSTACK_AUTH_TOKEN- }
-      - DEBUG=1
-      - LOG_LEVEL=trace
+      - "4566:4566"            # LocalStack Gateway
     volumes:
-      - "${LOCALSTACK_VOLUME_DIR:-./volume}:/var/lib/localstack"
+#      - "${LOCALSTACK_VOLUME_DIR:-./volume}:/var/lib/localstack"
       - "/var/run/docker.sock:/var/run/docker.sock"
+      - "./scripts/configure_localstack.sh:/etc/localstack/init/ready.d/script.sh"
+      - "./scripts/rotationLambda.zip:/scripts/rotationLambda.zip"
+      - "./src/main/resources/server.crt:/usr/local/share/ca-certificates/server.crt" # Mount the certificate
+      - "./src/main/resources/server.key:/usr/local/share/ca-certificates/server.key"
+    command: >
+      sh -c "cp /usr/local/share/ca-certificates/server.crt /etc/ssl/certs/ && 
+        cp /usr/local/share/ca-certificates/server.key /etc/ssl/private/ &&
+        update-ca-certificates &&
+        exec localstack"
+    networks:
+      great-network:
+        aliases:
+          - localhost.localstack.cloud
+
+  bedrock:
+    container_name: bedrock
+    build:
+      context: target/docker/stage
+      dockerfile: Dockerfile
+    depends_on:
+      localstack:
+        condition: service_healthy
+    ports:
+      - 8073:8073 # Expose your server's port
+    environment:
+      - JAVA_OPTS=-Djava.net.preferIPv4Stack=true
+      - LOCALSTACK_URL=http://localstack:4566
+    networks:
+      - great-network
+
+  # debug:
+  #   container_name: debug-container
+  #   image: ubuntu:latest
+  #   entrypoint: ["sleep", "infinity"] # Keeps the container running
+  #   tty: true
