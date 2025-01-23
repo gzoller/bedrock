@@ -1,6 +1,6 @@
 package co.blocke.bedrock
 package services
-package auth
+package aws
 
 import scala.jdk.CollectionConverters.*
 
@@ -11,19 +11,17 @@ import software.amazon.awssdk.services.secretsmanager.model.ListSecretVersionIds
 import zio.*
 import zio.http.*
 
-import aws.AwsEnvironment
-
 
 /**
   * Get a secret from AWS Secrets Manager
   */
-trait SecretKeyManager:
-  def getSecretKey: ZIO[Any, Throwable, KeyBundle]
+trait AwsSecretsManager:
+  def getSecretKeys: ZIO[Any, Throwable, KeyBundle]
 
 
-final case class LiveSecretKeyManager(authConfig: AuthConfig, awsEnv: AwsEnvironment) extends SecretKeyManager:
+final case class LiveAwsSecretsManager(authConfig: AuthConfig, awsEnv: AwsEnvironment) extends AwsSecretsManager:
 
-  def getSecretKey: ZIO[Any, Throwable, KeyBundle] = 
+  def getSecretKeys: ZIO[Any, Throwable, KeyBundle] = 
     for {
       keyBundle <- ZIO.attemptBlocking {
           val (endpointOverride, credentialsProvider) = awsEnv.getCreds
@@ -77,14 +75,14 @@ final case class LiveSecretKeyManager(authConfig: AuthConfig, awsEnv: AwsEnviron
     } yield (keyBundle)
 
 
-object SecretKeyManager:
-  def live: ZLayer[AuthConfig & Client & AwsEnvironment, Throwable, SecretKeyManager] =
+object AwsSecretsManager:
+  def live: ZLayer[AuthConfig & Client & AwsEnvironment, Throwable, AwsSecretsManager] =
     ZLayer.fromZIO {
       for {
-        _                <- ZIO.logInfo("SecretKeyManager: Loading AuthConfig")
+        _                <- ZIO.logInfo("AwsSecretsManager: Loading AuthConfig")
         authConfig <- ZIO.service[AuthConfig]
-        _                <- ZIO.logInfo("SecretKeyManager: Loading AwsEnvironment")
+        _                <- ZIO.logInfo("AwsSecretsManager: Loading AwsEnvironment")
         awsEnv <- ZIO.service[AwsEnvironment]
-        _                <- ZIO.logInfo("SecretKeyManager: Creating LiveSecretKeyManager")
-      } yield LiveSecretKeyManager(authConfig, awsEnv)
+        _                <- ZIO.logInfo("AwsSecretsManager: Creating LiveAwsSecretsManager")
+      } yield LiveAwsSecretsManager(authConfig, awsEnv)
     }

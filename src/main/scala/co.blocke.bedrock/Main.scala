@@ -1,15 +1,14 @@
 package co.blocke.bedrock
 
-import co.blocke.bedrock.services.endpoint.AwsEventEndpoint
 import zio.*
 import zio.http.*
 import zio.http.netty.*
 import zio.http.netty.client.NettyClientDriver
 
 import services.*
-import auth.*
+import aws.{AwsSnsEndpoint, AwsSecretsManager, AwsEnvironment}
+import auth.Authentication
 import db.BookRepo
-import aws.AwsEnvironment
 import services.endpoint.BookEndpoint
 
 object Main extends ZIOAppDefault {
@@ -37,21 +36,21 @@ object Main extends ZIOAppDefault {
       _                <- ZIO.logInfo("Loading BookEndpoint service")
       bookEndpoint     <- ZIO.service[BookEndpoint]
       _                <- ZIO.logInfo("Loading AwsEventEndpoint service")
-      awsEventEndpoint <- ZIO.service[AwsEventEndpoint]
+      awsSnsEndpoint   <- ZIO.service[AwsSnsEndpoint]
 
       // Start the server first
       _                <- ZIO.logInfo("Setting routes")
-      routes           =  bookEndpoint.routes ++ awsEventEndpoint.routes
+      routes           =  bookEndpoint.routes ++ awsSnsEndpoint.routes
       shutdownPromise  <- Promise.make[Nothing, Unit] // Promises for graceful shutdown
       _                <- ZIO.logInfo("Starting server...")
       serverFiber      <- Server.serve(routes).fork        // Start the secure server
       _                <- ZIO.logInfo("Secure server started on port 8443.")
 
       // SNS subscription after servers are running
-      _                <- awsEventEndpoint.subscribeToTopic()
+      _                <- awsSnsEndpoint.subscribeToTopic()
       _                <- ZIO.addFinalizer(
                             ZIO.logInfo("Unsubscribing from SNS topic...") *> 
-                            awsEventEndpoint.unsubscribeOnShutdown
+                            awsSnsEndpoint.unsubscribeOnShutdown
                           )
 
       _                <- ZIO.logInfo("Application is running. Press Ctrl+C to exit.")
@@ -69,15 +68,15 @@ object Main extends ZIOAppDefault {
 
       // make here magically sews together all the dependencies for the program.
       // MUCH easier than doing it manually!
-      val appLayer = ZLayer.make[BookEndpoint & AwsEventEndpoint & Client](
+      val appLayer = ZLayer.make[BookEndpoint & AwsSnsEndpoint & Client](
         clientLayer,
         sharedAppConfig,
         Authentication.live,
-        SecretKeyManager.live,
+        AwsSecretsManager.live,
         AwsEnvironment.live,
         BookRepo.mock,
         BookEndpoint.live,
-        AwsEventEndpoint.live
+        AwsSnsEndpoint.live
       )
 
       program.provideSomeLayer[Scope](appLayer ++ serverLayer ++ clientLayer)
@@ -85,16 +84,3 @@ object Main extends ZIOAppDefault {
     }.exitCode
   }
 }
-
-
-/* 
-acquireRelease pattern for graceful shutdown--may be old approach
-
-val serverLayer: ZLayer[Any, Nothing, Server] = ZLayer.scoped {
-  ZIO.acquireRelease(
-    for {
-      server <- Server.start(8080, app) // Start the server
-    } yield server
-  )(server => server.stop) // Gracefully stop the server
-}
- */

@@ -1,6 +1,6 @@
 package co.blocke.bedrock
 package services
-package endpoint
+package aws
 
 import software.amazon.awssdk.services.sns.SnsClient
 import software.amazon.awssdk.services.sns.model.*
@@ -9,7 +9,6 @@ import zio.http.*
 import zio.http.endpoint.Endpoint
 
 import auth.Authentication
-import aws.AwsEnvironment
 
 import scala.xml.XML
 import scala.jdk.CollectionConverters.*
@@ -20,13 +19,13 @@ import java.security.cert.CertificateFactory
 import java.util.Base64
 
 
-trait AwsEventEndpoint:
+trait AwsSnsEndpoint:
   def routes: Routes[Client & Scope, Nothing]
   def subscribeToTopic(): ZIO[Any, Throwable, Unit]
   def unsubscribeOnShutdown: URIO[Any, Any]
 
 
-final case class LiveAwsEventEndpoint(auth: Authentication, awsConfig: AWSConfig, awsEnv: AwsEnvironment) extends AwsEventEndpoint:
+final case class LiveAwsSnsEndpoint(auth: Authentication, awsConfig: AWSConfig, awsEnv: AwsEnvironment) extends AwsSnsEndpoint:
 
   private var snsSubscriptionArn: String = ""
 
@@ -85,7 +84,7 @@ final case class LiveAwsEventEndpoint(auth: Authentication, awsConfig: AWSConfig
     .ignore
   }    
 
-  def verifySnsMessage(message: Map[String, String]): ZIO[Any, Nothing, Boolean] = {
+  private def verifySnsMessage(message: Map[String, String]): ZIO[Any, Nothing, Boolean] = {
     // Step 1: Download the signing certificate
     ZIO.attempt {
       // Step 1: Get the certificate and public key
@@ -157,7 +156,7 @@ final case class LiveAwsEventEndpoint(auth: Authentication, awsConfig: AWSConfig
     } yield ()).orDie
 
   // The Request coming in from SNS has some non-JSON contentType in the body, so this little intercept
-  // converts the body to JSON for us.
+  // converts the body to JSON for us so ZIO's endpoint JSON parsing can work.
   private val fixContentTypeMiddleware: HandlerAspect[Any, Unit] =
     HandlerAspect.interceptIncomingHandler {
       Handler.fromFunctionZIO[Request] { request =>
@@ -208,14 +207,14 @@ final case class LiveAwsEventEndpoint(auth: Authentication, awsConfig: AWSConfig
   val routes: Routes[Client & Scope, Nothing] = Routes(sns_endpoint.implementHandler[Client & Scope](sns_handler)) @@ fixContentTypeMiddleware
 
 
-object AwsEventEndpoint:
-  def live: ZLayer[Authentication & AWSConfig & AwsEnvironment, Nothing, AwsEventEndpoint] = {
+object AwsSnsEndpoint:
+  def live: ZLayer[Authentication & AWSConfig & AwsEnvironment, Nothing, AwsSnsEndpoint] = {
     ZLayer.fromZIO {
       for {
         auth      <- ZIO.service[Authentication]
         awsConfig <- ZIO.service[AWSConfig]
         awsEnv    <- ZIO.service[AwsEnvironment]
         promise   <- Promise.make[Throwable, String]
-      } yield LiveAwsEventEndpoint(auth, awsConfig, awsEnv)
+      } yield LiveAwsSnsEndpoint(auth, awsConfig, awsEnv)
     }
   }

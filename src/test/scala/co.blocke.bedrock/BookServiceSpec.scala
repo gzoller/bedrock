@@ -1,16 +1,17 @@
 package co.blocke.bedrock
+package services
 
 import zio.*
 import zio.json.*
 import zio.test.*
 import zio.test.Assertion.*
 import zio.http.*
-import services.db.*
-import services.auth.*
 import pdi.jwt.{Jwt, JwtAlgorithm, JwtClaim}
-import services.auth.{Session, SecretKeyManager, LiveAuthentication, Key}
+
+import auth.*
+import aws.{AwsSecretsManager, Key, KeyBundle}
 import services.endpoint.LiveBookEndpoint
-import services.db.BookRepo
+import db.BookRepo
 
 /**
   * This lovely thing runs the services' routes directly, without the drama
@@ -23,22 +24,22 @@ object BookServiceSpec extends ZIOSpecDefault {
           None, 
           Key("bogus_version","theWayIsShut",now) )
 
-  val secretKeyManagerLayer: ZLayer[Any, Nothing, SecretKeyManager] =
+  val AwsSecretsManagerLayer: ZLayer[Any, Nothing, AwsSecretsManager] =
     ZLayer.fromZIO {
       for {
         clock <- ZIO.clock // Only depends on Clock
         now <- clock.instant
-      } yield new SecretKeyManager {
-        override def getSecretKey: ZIO[Any, Throwable, KeyBundle] = 
+      } yield new AwsSecretsManager {
+        override def getSecretKeys: ZIO[Any, Throwable, KeyBundle] = 
           ZIO.succeed(keyBundle(now))
       }
     }
 
-  val authenticationLayer: ZLayer[AuthConfig & SecretKeyManager, Throwable, Authentication] =
+  val authenticationLayer: ZLayer[AuthConfig & AwsSecretsManager, Throwable, Authentication] =
     ZLayer.fromZIO {
       for {
         config <- ZIO.service[AuthConfig] // Depends on Config
-        manager <- ZIO.service[SecretKeyManager] // Depends on SecretKeyManager
+        manager <- ZIO.service[AwsSecretsManager] // Depends on AwsSecretsManager
         clock <- ZIO.clock // Depends on Clock
         now <- clock.instant
       } yield new LiveAuthentication(
@@ -69,7 +70,7 @@ object BookServiceSpec extends ZIOSpecDefault {
 
   // Compose only the layers needed for Authentication
   val authDependencies =
-    AppConfig.live ++ secretKeyManagerLayer
+    AppConfig.live ++ AwsSecretsManagerLayer
 
   val authenticationAndRepo =
     authDependencies >>> authenticationLayer ++ bookServiceLayer

@@ -2,28 +2,20 @@ package co.blocke.bedrock
 package services
 package aws
 
-import scala.compiletime.uninitialized
-
-import org.apache.commons.net.util.SubnetUtils
 import software.amazon.awssdk.auth.credentials.*
 import software.amazon.awssdk.regions.Region
 import zio.*
 import zio.http.*
-import zio.json.*
 
 
 trait AwsEnvironment:
   def isRunningLocally: Boolean
   def getRegion: Region
   def getCreds: (Option[java.net.URI], AwsCredentialsProvider)
-  def getAwsIPs: ZIO[Client & Scope, Throwable, Unit]
-  def isIpAllowed(ip: String): ZIO[Any, Throwable, Boolean]
 
 
 // This is the live/real implementation. Could produce a mock implementation to inject for testing
 final case class LiveAwsEnvironment(awsConfig: AWSConfig, region: Option[Region]) extends AwsEnvironment:
-
-  private var validAwsIpRanges: ValidAwsIpRanges = uninitialized  // a set-once variable
 
   def isRunningLocally: Boolean = region.isEmpty
   def getRegion: Region = region.getOrElse(Region.US_EAST_1)
@@ -40,44 +32,6 @@ final case class LiveAwsEnvironment(awsConfig: AWSConfig, region: Option[Region]
     else
       // Non-local configuration, ie running on real AWS (uses default AWS credentials)
       (None, DefaultCredentialsProvider.create())
-
-  def getAwsIPs: ZIO[Scope & Client, Throwable, Unit] =
-    for {
-      client   <- ZIO.service[Client]
-      response <- client.request(Request.get(awsConfig.ipRangesUrl))
-      json     <- response.body.asString
-      awsIPs <- ZIO
-        .fromEither(json.fromJson[AwsIPs])
-        .mapError(ex => new RuntimeException(s"Failed to parse JSON: $json with error $ex"))
-    } yield {
-      validAwsIpRanges = calcRanges(awsIPs)
-      ()
-    }
-
-  private def calcRanges(awsIPs: AwsIPs): ValidAwsIpRanges = {
-    val amazonPrefixes = awsIPs.prefixes.filter(_.service == "AMAZON")
-
-    val ipv4Ranges = amazonPrefixes.flatMap(_.ip_prefix) // Extract IPv4 prefixes
-    val ipv6Ranges = amazonPrefixes.flatMap(_.ipv6_prefix) // Extract IPv6 prefixes
-
-    ValidAwsIpRanges(
-      ipv4 = ipv4Ranges,
-      ipv6 = ipv6Ranges
-    )
-  }
-
-  // Does the given ip belong to any of the given ranges (either IP4 or IP6 as appropriate)
-  def isIpAllowed(ip: String): ZIO[Any, Throwable, Boolean] = {
-    ZIO.attempt{
-      val isIpv4 = ip.contains(".") // Simple check for IPv4
-      val validRanges = if (isIpv4) validAwsIpRanges.ipv4 else validAwsIpRanges.ipv6
-
-      validRanges.exists { range =>
-        val subnet = new SubnetUtils(range)
-        subnet.getInfo.isInRange(ip)
-      }
-    }
-  }
 
 
 object AwsEnvironment:

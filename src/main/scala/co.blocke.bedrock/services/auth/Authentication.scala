@@ -6,6 +6,8 @@ import co.blocke.bedrock.services.auth.JwtToken.TokenError
 import zio.*
 import zio.http.*
 
+import aws.{AwsSecretsManager, KeyBundle}
+
 
 trait Authentication:
   def login(username: String, password: String): ZIO[Any, Either[GeneralFailure, BadCredentialError], TokenBundle] // returns a token
@@ -16,7 +18,7 @@ trait Authentication:
 final case class LiveAuthentication(
   authConfig: AuthConfig,
   clock: zio.Clock,
-  secretKeyManager: SecretKeyManager,
+  AwsSecretsManager: AwsSecretsManager,
   @volatile private var keyBundle: KeyBundle
 ) extends Authentication:
 
@@ -30,7 +32,7 @@ final case class LiveAuthentication(
     */
   def updateKeys: ZIO[Any, Throwable, Unit] =
     for {
-      keyBundleLive <- secretKeyManager.getSecretKey
+      keyBundleLive <- AwsSecretsManager.getSecretKeys
     } yield {
       keyBundle = keyBundleLive
     }
@@ -142,17 +144,17 @@ final case class LiveAuthentication(
 
 
 object Authentication:
-  def live: ZLayer[AuthConfig & SecretKeyManager, Throwable, Authentication] =
+  def live: ZLayer[AuthConfig & AwsSecretsManager, Throwable, Authentication] =
     ZLayer.fromZIO {
       for {
-        _               <- ZIO.logInfo("Authentication: Loading SecretKeyManager")
-        manager         <- ZIO.service[SecretKeyManager]
+        _               <- ZIO.logInfo("Authentication: Loading AwsSecretsManager")
+        manager         <- ZIO.service[AwsSecretsManager]
         _               <- ZIO.logInfo("Authentication: Loading AuthConfig")
         authConfig      <- ZIO.service[AuthConfig]
         _               <- ZIO.logInfo("Authentication: Loading Clock")
         clock           <- ZIO.clock
         _               <- ZIO.logInfo("Authentication: Getting secret keys")
-        keyBundle       <- manager.getSecretKey.tapError(e => ZIO.logError("Authentication ERROR: "+e.getMessage))
+        keyBundle       <- manager.getSecretKeys.tapError(e => ZIO.logError("Authentication ERROR: "+e.getMessage))
         _               <- ZIO.logInfo("Authentication: Creating LiveAuthentication")
       } yield LiveAuthentication(authConfig, clock, manager, keyBundle)
     }

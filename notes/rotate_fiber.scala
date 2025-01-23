@@ -1,7 +1,7 @@
 // How to mock up a fiber in Authentication to rotate (relode) secret keys from SecretsManager
 
 final case class LiveAuthentication(
-    secretKeyManager: SecretKeyManager,
+    AwsSecretsManager: AwsSecretsManager,
     @volatile private var currentSecretKey: Key,
     @volatile private var previousSecretKey: Option[Key]
 ) extends Authentication {
@@ -26,7 +26,7 @@ final case class LiveAuthentication(
       }
       .mapZIO { event =>
         ZIO.logInfo(s"Event received: $event") *>
-          secretKeyManager.getSecretKey.flatMap {
+          AwsSecretsManager.getSecretKey.flatMap {
             case (newCurrent, newPrevious) =>
               ZIO.attempt {
                 currentSecretKey = newCurrent

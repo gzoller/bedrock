@@ -1,10 +1,12 @@
 package co.blocke.bedrock
 package services
-package endpoint
+package aws
 
 import zio.http.codec.*
 import zio.schema.*
 import zio.json.*
+
+import java.time.Instant
 
 
 // AWS SNS Message
@@ -45,3 +47,7 @@ object SnsArn:
   implicit val schema: Schema[SnsArn] = DeriveSchema.gen[SnsArn]
   implicit val snsCodec: ContentCodec[SnsArn] = HttpCodec.content[SnsArn]
   implicit val codec: JsonCodec[SnsArn] = DeriveJsonCodec.gen[SnsArn]
+
+case class Key(version: String, value: String, instantCreated: Instant)
+
+case class KeyBundle( currentTokenKey: Key, previousTokenKey: Option[Key], sessionKey: Key )

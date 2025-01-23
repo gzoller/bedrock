@@ -1,14 +1,15 @@
 package co.blocke.bedrock
-package services.auth
+package services
+package auth
 
 import zio.*
 import zio.test.*
 import zio.test.Assertion.*
 import zio.http.*
-import services.db.*
-import services.auth.*
 import java.time.Instant
-import services.db.BookRepo
+
+import db.*
+import aws.*
 
 import izumi.reflect.Tag
 
@@ -24,13 +25,13 @@ object AuthServiceSpec extends ZIOSpecDefault {
       else List.empty
   }
 
-  // This mock SecretKeyManager rotates the keys upon every request
-  case class MockSecretKeyManager(clock: zio.Clock) extends SecretKeyManager {
+  // This mock AwsSecretsManager rotates the keys upon every request
+  case class MockAwsSecretsManager(clock: zio.Clock) extends AwsSecretsManager {
     private var version: Int = 1
     private var current: Key = Key(s"v$version", s"secret_$version", Instant.EPOCH) // Placeholder
     private var previous: Option[Key] = None
 
-    override def getSecretKey: ZIO[Any, Throwable, KeyBundle] =
+    override def getSecretKeys: ZIO[Any, Throwable, KeyBundle] =
       for {
         now <- clock.instant //.map(_.toEpochMilli) // Fetch time dynamically
         result <- ZIO.succeed {
@@ -45,26 +46,26 @@ object AuthServiceSpec extends ZIOSpecDefault {
       } yield KeyBundle(current, previous, Key("sess_ver", "theWayIsShut", now))
   }
 
-  val secretKeyManagerLayer: ZLayer[Any, Nothing, SecretKeyManager] =
+  val AwsSecretsManagerLayer: ZLayer[Any, Nothing, AwsSecretsManager] =
     ZLayer.fromZIO {
       for {
         clock <- ZIO.clock // Only depends on Clock
-      } yield new MockSecretKeyManager(clock)
+      } yield new MockAwsSecretsManager(clock)
     }
 
-  val authenticationLayer: ZLayer[AuthConfig & SecretKeyManager, Throwable, Authentication] =
+  val authenticationLayer: ZLayer[AuthConfig & AwsSecretsManager, Throwable, Authentication] =
     ZLayer.fromZIO {
       for {
         authConfig <- ZIO.service[AuthConfig] // Depends on Config
-        manager <- ZIO.service[SecretKeyManager] // Depends on SecretKeyManager
+        manager <- ZIO.service[AwsSecretsManager] // Depends on AwsSecretsManager
         clock <- ZIO.clock // Depends on Clock
-        keyBundle <- manager.getSecretKey
+        keyBundle <- manager.getSecretKeys
       } yield new LiveAuthentication(authConfig, clock, manager, keyBundle)
     }
 
   // Compose the final layer
   val finalLayer = 
-    AppConfig.live ++ secretKeyManagerLayer >>> authenticationLayer ++ secretKeyManagerLayer
+    AppConfig.live ++ AwsSecretsManagerLayer >>> authenticationLayer ++ AwsSecretsManagerLayer
 
   def spec = suite("AuthServiceSpec")(
     test("Simple token encoding and decoding should work (w/o rotation)") {
@@ -177,8 +178,8 @@ object AuthServiceSpec extends ZIOSpecDefault {
       for {
         clock    <- ZIO.clock
         auth     <- ZIO.service[Authentication]
-        keyMgr   <- ZIO.service[SecretKeyManager]
-        keys     <- keyMgr.getSecretKey  // rotate the keys but don't tell Authentication with auth.updateKeys
+        keyMgr   <- ZIO.service[AwsSecretsManager]
+        keys     <- keyMgr.getSecretKeys  // rotate the keys but don't tell Authentication with auth.updateKeys
         token    <- JwtToken.jwtEncode("TestUser", keys.currentTokenKey.value, 3600)(clock)
         result   <- auth.asInstanceOf[LiveAuthentication].decodeToken(token,None).either
       } yield result match {

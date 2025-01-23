@@ -21,10 +21,6 @@ type AuthToken = Option[String]
 
 case class Session(userId: String)  // This is the payload of the JWT token and can contain other things like roles, etc.
 
-case class Key(version: String, value: String, instantCreated: Instant)
-
-case class KeyBundle( currentTokenKey: Key, previousTokenKey: Option[Key], sessionKey: Key )
-
 case class TokenHeader(sub: String, iat: Long)
 object TokenHeader:
   implicit val codec: JsonCodec[TokenHeader] = DeriveJsonCodec.gen[TokenHeader]

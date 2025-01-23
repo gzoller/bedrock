@@ -26,7 +26,7 @@ object ITAuthServiceSpec extends ZIOSpecDefault {
       Main.clientLayer,
       AppConfig.live.tap(_ => ZIO.logInfo("Configuration loaded for test")),
       Authentication.live,
-      SecretKeyManager.live,
+      AwsSecretsManager.live,
       AwsEnvironment.live,
       BookRepo.mock, // Use mock repositories for tests
       BookEndpoint.live,
@@ -42,7 +42,7 @@ object ITAuthServiceSpec extends ZIOSpecDefault {
       Main.clientLayer,
       AppConfig.live.tap(_ => ZIO.logInfo("Configuration loaded for test")),
       Authentication.live,
-      SecretKeyManager.live,
+      AwsSecretsManager.live,
       AwsEnvironment.live,
       BookRepo.mock,
       BookEndpoint.live,
@@ -204,7 +204,7 @@ object ITAuthServiceSpec extends ZIOSpecDefault {
       for {
         clock    <- ZIO.clock
         auth     <- ZIO.service[Authentication]
-        keyMgr   <- ZIO.service[SecretKeyManager]
+        keyMgr   <- ZIO.service[AwsSecretsManager]
         keys     <- keyMgr.getSecretKey  // rotate the keys but don't tell Authentication with auth.updateKeys
         token    <- JwtToken.jwtEncode("TestUser", keys.currentTokenKey.value, 3600)(clock)
         result   <- auth.asInstanceOf[LiveAuthentication].decodeToken(token,None).either
