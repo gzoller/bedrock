@@ -16,7 +16,6 @@ Starting point for REST service
 IN-PROGRESS:
 * Figure out how to do integration testing in sbt
 * Separate unit and integration tests with mocks for unit
-* Refactor--don't like AWS code scattered about
 
 DEPLOYMENT/AWS:
 * Configure logback to send logs to CloudWatch. May need templated config files to do this.
@@ -114,13 +113,14 @@ Example Workflow for Rotation and Validation
 
 ## Running
 
-We need to run some docker images to simulate services in AWS locally
+Be sure you've got Docker running on your local host and that you've run ```sbt docker:publishLocal```
+to create a Docker container for Bedrock.  Then you can run the following to launch LocalStack (AWD simulator)
+and Bedrock:
 ```
-scripts/aws_local_start.sh
+docker-compose up
 ```
 
 Stopping:
-
 ```
 docker-compose down
 ```

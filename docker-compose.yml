@@ -14,8 +14,8 @@ services:
       - "/var/run/docker.sock:/var/run/docker.sock"
       - "./scripts/configure_localstack.sh:/etc/localstack/init/ready.d/script.sh"
       - "./scripts/rotationLambda.zip:/scripts/rotationLambda.zip"
-      - "./src/main/resources/server.crt:/usr/local/share/ca-certificates/server.crt" # Mount the certificate
-      - "./src/main/resources/server.key:/usr/local/share/ca-certificates/server.key"
+      - "./certs/server.crt:/usr/local/share/ca-certificates/server.crt" # Mount the certificate
+      - "./certs/server.key:/usr/local/share/ca-certificates/server.key"
     command: >
       sh -c "cp /usr/local/share/ca-certificates/server.crt /etc/ssl/certs/ && 
         cp /usr/local/share/ca-certificates/server.key /etc/ssl/private/ &&

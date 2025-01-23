@@ -39,3 +39,6 @@ classes/
 # localstack
 localstack-data
 volume/
+
+# certs
+certs/
