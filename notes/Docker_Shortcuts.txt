@@ -1,0 +1,8 @@
+
+
+# View Logs for a Container
+
+# (Note for integration tests, if you want to see logs, change "docker-compose down" to "docker-compose stop" or
+# the images will be pruned after the test)
+
+docker logs bedrock

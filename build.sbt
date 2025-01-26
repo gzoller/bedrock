@@ -5,14 +5,12 @@ enablePlugins(BuildInfoPlugin)
 enablePlugins(DockerPlugin)
 enablePlugins(JavaAppPackaging)
 
-val scala3Version = "3.5.2"
+ThisBuild / scalaVersion := "3.5.2"
 
 lazy val root = (project in file("."))
   .settings(
     name := "bedrock",
     version := "0.1.0-SNAPSHOT",
-
-    scalaVersion := scala3Version,
 
     Compile / mainClass := Some("co.blocke.bedrock.Main"),
 
@@ -45,6 +43,9 @@ lazy val root = (project in file("."))
       "-Wunused:imports", // Warn on unused imports
       "-explain-cyclic"
     ),
+
+    // Include the /certs directory in the resource files
+    Compile / unmanagedResourceDirectories += baseDirectory.value / "certs",
     
     libraryDependencies ++= Seq(
       // ---- ZIO
@@ -64,7 +65,6 @@ lazy val root = (project in file("."))
       // ---- Misc
       "org.scala-lang.modules" %% "scala-xml" % "2.3.0",
       "ch.qos.logback" % "logback-classic" % "1.4.6",
-      "com.github.jwt-scala" %% "jwt-core" % "10.0.1",
       "com.github.jwt-scala" %% "jwt-core" % "10.0.1",
       "commons-net" % "commons-net" % "3.9.0",
       "ch.qos.logback" % "logback-classic" % "1.4.6",
@@ -86,6 +86,7 @@ lazy val root = (project in file("."))
     // Docker packaging settings
     dockerExposedPorts += 8073,
     dockerBaseImage := "openjdk:22",
+    dockerBuildOptions += "--no-cache"
   )
   
 // Integration test subproject
@@ -94,26 +95,55 @@ lazy val root = (project in file("."))
 lazy val integrationTests = (project in file("it"))
   .settings(
     name := "IntegrationTests",
-    scalaVersion := "3.5.2",
     libraryDependencies ++= Seq(
       "dev.zio" %% "zio" % "2.1.12",
       "dev.zio" %% "zio-test" % "2.1.12",
-      "dev.zio" %% "zio-test-sbt" % "2.1.12"
+      "dev.zio" %% "zio-test-sbt" % "2.1.12",
+      "software.amazon.awssdk" % "secretsmanager" % "2.20.0"
     ),
     testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework"),
 
     // Proper lazy evaluation for test execution
     Test / test := Def.taskDyn {
-      val startLocalStack = Process("./scripts/aws_local_start.sh").!(ProcessLogger(println, System.err.println))
-      if (startLocalStack != 0) {
-        sys.error("Failed to start LocalStack.")
+      import scala.sys.process._
+      import scala.util.control.Breaks._
+
+      def startAndWatchDockerCompose(requiredService: String, successMessage: String, timeout: Int = 60): Unit = {
+        val startCommand = "docker-compose up --build -d"
+        val logsCommand = "docker-compose logs -f"
+
+        // Start docker-compose in detached mode
+        val startResult = Process(startCommand).!(ProcessLogger(println, System.err.println))
+        if (startResult != 0) {
+          sys.error("Failed to start docker-compose.")
+        }
+
+        // Stream logs and wait for the success message
+        val endTime = System.currentTimeMillis() + (timeout * 1000)
+
+        breakable {
+          Process(logsCommand).lineStream.foreach { line =>
+            println(line) // Print log lines to the console for debugging
+            if (line.contains(requiredService) && line.contains(successMessage)) {
+              break // Exit the loop and start the test
+            }
+            if (System.currentTimeMillis() > endTime) {
+              sys.error(s"Timeout waiting for $requiredService to be ready.")
+            }
+          }
+        }
       }
+
+      startAndWatchDockerCompose("bedrock", "Application is running. Press Ctrl+C to exit.", timeout = 60)
+      println("....  OK, ready for testing  ....")
 
       // Create a new task to run the tests after LocalStack setup
       Def.task {
         try {
           (Test / executeTests).value // Run tests lazily after setup
         } finally {
+          // NOTE: change this to `docker-compose stop` if you want to stop LocalStack after the tests and have logs remain
+          // 'down' will remove the containers and logs
           val stopLocalStack = Process("docker-compose down").!(ProcessLogger(println, System.err.println))
           if (stopLocalStack != 0) {
             sys.error("Failed to stop LocalStack.")

@@ -13,7 +13,8 @@ trait Authentication:
   def login(username: String, password: String): ZIO[Any, Either[GeneralFailure, BadCredentialError], TokenBundle] // returns a token
   def updateKeys: ZIO[Any, Throwable, Unit]
   def bearerAuthWithContext: HandlerAspect[Any, Session]
-
+  def issueExpiredToken(expiredBySec: Long, subject: String, isSession: Boolean): ZIO[Any, Throwable, String]  // used only for integration testing
+  def getKeyBundleVersion: UIO[Int]
 
 final case class LiveAuthentication(
   authConfig: AuthConfig,
@@ -26,6 +27,15 @@ final case class LiveAuthentication(
   private[auth] def getKeyBundle: KeyBundle = keyBundle
 
   implicit val theClock: zio.Clock = clock
+  private var keyBundleVersion = 0  // Used to track key bundle changes in integration testing
+
+  def getKeyBundleVersion: UIO[Int] = ZIO.succeed(keyBundleVersion)
+
+  def issueExpiredToken(expiredBySec: Long, subject: String, isSession: Boolean): ZIO[Any, Throwable, String] =  // used only for integration testing
+    if isSession then 
+      JwtToken.jwtEncode(subject, keyBundle.sessionKey.value, expiredBySec * -1)
+    else
+      JwtToken.jwtEncode(subject, keyBundle.currentTokenKey.value, expiredBySec * -1)
 
   /**
     * Update the current and previous keys with the latest keys from the secret key manager.
@@ -34,6 +44,7 @@ final case class LiveAuthentication(
     for {
       keyBundleLive <- AwsSecretsManager.getSecretKeys
     } yield {
+      keyBundleVersion += 1
       keyBundle = keyBundleLive
     }
 
@@ -49,7 +60,7 @@ final case class LiveAuthentication(
     */
   def login(username: String, password: String): ZIO[Any, Either[GeneralFailure, BadCredentialError], TokenBundle] =
     for {
-      sessionToken <- JwtToken.jwtEncode(username, keyBundle.sessionKey.value, authConfig.sessionDurationSec)
+      sessionToken <- JwtToken.jwtEncode(username+" (Session)", keyBundle.sessionKey.value, authConfig.sessionDurationSec)
         .mapError { throwable =>
           val errorMessage = s"Failed to generate session JWT for user $username: ${throwable.getMessage}"
           GeneralFailure(errorMessage)
@@ -71,7 +82,8 @@ final case class LiveAuthentication(
       now <- clock.instant
       outcome <- JwtToken
         .jwtDecode(authToken, keyBundle.currentTokenKey.value)
-        .map( claim => (None, Session(claim.subject.get)) )
+        .map{ claim => 
+          (None, Session(claim.subject.get)) }
         .catchSome {
           case TokenError.Expired =>
             // Complexity here:  
@@ -103,7 +115,9 @@ final case class LiveAuthentication(
                   ZIO.fail(TokenError.BadSignature)
                 } // Fallback if previous key decode fails
             ).getOrElse(ZIO.fail(TokenError.BadSignature)) // No previous key, propagate the error
-          }.mapError(_ => Response.unauthorized("Invalid or expired token!")) // Map errors to Response
+        }.mapError{_ =>  // Map errors to Response
+          Response.unauthorized("Invalid or expired token!")
+        }
     } yield outcome
   }
 

@@ -23,11 +23,15 @@ trait AwsSnsEndpoint:
   def routes: Routes[Client & Scope, Nothing]
   def subscribeToTopic(): ZIO[Any, Throwable, Unit]
   def unsubscribeOnShutdown: URIO[Any, Any]
+  def isSubscribedToSNS: URIO[Any, Boolean]
 
 
 final case class LiveAwsSnsEndpoint(auth: Authentication, awsConfig: AWSConfig, awsEnv: AwsEnvironment) extends AwsSnsEndpoint:
 
   private var snsSubscriptionArn: String = ""
+
+  def isSubscribedToSNS: URIO[Any, Boolean] = 
+    ZIO.succeed(snsSubscriptionArn != "")
 
   def subscribeToTopic(): ZIO[Any, Throwable, Unit] = 
     ZIO.attempt {
@@ -50,9 +54,6 @@ final case class LiveAwsSnsEndpoint(auth: Authentication, awsConfig: AWSConfig, 
 
         // Subscribe to the topic
         val subscribeResponse = snsClient.subscribe(subscribeRequest)
-        val foo = subscribeResponse.subscriptionArn()
-        ZIO.logInfo("!!!!!!! Subscribed to SNS topic (foo): "+foo)
-
         ()
       } catch {
         case e => 

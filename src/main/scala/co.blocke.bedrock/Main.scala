@@ -9,7 +9,7 @@ import services.*
 import aws.{AwsSnsEndpoint, AwsSecretsManager, AwsEnvironment}
 import auth.Authentication
 import db.BookRepo
-import services.endpoint.BookEndpoint
+import services.endpoint.{BookEndpoint, HealthEndpoint}
 
 object Main extends ZIOAppDefault {
 
@@ -35,12 +35,13 @@ object Main extends ZIOAppDefault {
     for {
       _                <- ZIO.logInfo("Loading BookEndpoint service")
       bookEndpoint     <- ZIO.service[BookEndpoint]
+      healthEndpoint   <- ZIO.service[HealthEndpoint]
       _                <- ZIO.logInfo("Loading AwsEventEndpoint service")
       awsSnsEndpoint   <- ZIO.service[AwsSnsEndpoint]
 
       // Start the server first
       _                <- ZIO.logInfo("Setting routes")
-      routes           =  bookEndpoint.routes ++ awsSnsEndpoint.routes
+      routes           =  bookEndpoint.routes ++ awsSnsEndpoint.routes ++ healthEndpoint.routes
       shutdownPromise  <- Promise.make[Nothing, Unit] // Promises for graceful shutdown
       _                <- ZIO.logInfo("Starting server...")
       serverFiber      <- Server.serve(routes).fork        // Start the secure server
@@ -68,7 +69,7 @@ object Main extends ZIOAppDefault {
 
       // make here magically sews together all the dependencies for the program.
       // MUCH easier than doing it manually!
-      val appLayer = ZLayer.make[BookEndpoint & AwsSnsEndpoint & Client](
+      val appLayer = ZLayer.make[BookEndpoint & AwsSnsEndpoint & HealthEndpoint & Client](
         clientLayer,
         sharedAppConfig,
         Authentication.live,
@@ -76,7 +77,8 @@ object Main extends ZIOAppDefault {
         AwsEnvironment.live,
         BookRepo.mock,
         BookEndpoint.live,
-        AwsSnsEndpoint.live
+        AwsSnsEndpoint.live,
+        HealthEndpoint.live
       )
 
       program.provideSomeLayer[Scope](appLayer ++ serverLayer ++ clientLayer)

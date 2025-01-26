@@ -21,6 +21,11 @@ services:
         cp /usr/local/share/ca-certificates/server.key /etc/ssl/private/ &&
         update-ca-certificates &&
         exec localstack"
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
     networks:
       great-network:
         aliases:
@@ -39,6 +44,11 @@ services:
     environment:
       - JAVA_OPTS=-Djava.net.preferIPv4Stack=true
       - LOCALSTACK_URL=http://localstack:4566
+    healthcheck:
+      test: ["CMD", "curl", "-fk", "https://bedrock:8073/health"]
+      interval: 5s
+      timeout: 2s
+      retries: 5
     networks:
       - great-network
 

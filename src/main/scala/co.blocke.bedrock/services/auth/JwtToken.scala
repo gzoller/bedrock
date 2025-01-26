@@ -62,20 +62,19 @@ object JwtToken:
   private[auth] def jwtDecode(
     token: String, 
     key: String, 
-    leewaySec: Long = 0L, 
-    withExpiration: Boolean = true
+    leewaySec: Long = 0L
   )(implicit clock: zio.Clock): ZIO[Any, TokenError, JwtClaim] = 
-    for {
+    (for {
       claim <- ZIO.fromTry(
             Jwt(ClockConverter.dynamicJavaClock(clock))
-            .decode(token, key, Seq(JwtAlgorithm.HS512), JwtOptions(leeway = leewaySec, expiration = withExpiration)))
+            .decode(token, key, Seq(JwtAlgorithm.HS512), JwtOptions(leeway = leewaySec, expiration = true)))
             .mapError( _ match {
               case _: exceptions.JwtExpirationException => TokenError.Expired
               case e: exceptions.JwtValidationException => TokenError.BadSignature
-              case _                                    => TokenError.OtherProblem
+              case x                                    => TokenError.OtherProblem
             })
       fixedClaim <- fixClaim(claim)
-    } yield (fixedClaim)
+    } yield (fixedClaim))
     
   private[auth] def refreshToken(
     token: String,
@@ -86,8 +85,9 @@ object JwtToken:
   )(implicit clock: zio.Clock): ZIO[Any, TokenError, String] = 
     for {
       now <- clock.instant
-      // Decode the token without verifying expiration and allowing for extra time (refresh_window_sec from config)
-      sloppy <- jwtDecode(token, decodeWith, leewaySec, true)
+      // Decode the token allowing for extra time (refresh_window_sec from config) to see if it is still in the
+      // refresh window
+      sloppy <- jwtDecode(token, decodeWith, leewaySec)
       newToken <- sloppy.subject match {
         case None => ZIO.fail(TokenError.NoSubject)
         case Some(subject) => 

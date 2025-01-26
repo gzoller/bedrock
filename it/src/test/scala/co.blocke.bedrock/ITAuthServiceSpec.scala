@@ -6,263 +6,217 @@ import zio.*
 import zio.test.*
 import zio.test.Assertion.*
 import zio.http.*
-import java.time.Instant
-import services.endpoint.* 
-import services.db.*
-import services.aws.*
+import zio.json.*
 
-// import izumi.reflect.Tag
+import software.amazon.awssdk.services.secretsmanager.SecretsManagerClient
+import software.amazon.awssdk.services.secretsmanager.model._
 
 /**
   * Test all the Auth behavior, token rotation etc.
   */
 object ITAuthServiceSpec extends ZIOSpecDefault {
 
-   // Layer for the ZIO HTTP client
-  val clientLayer: ZLayer[Any, Nothing, Client] = Client.default.orDie
+  def realTimeDelay(duration: Duration): ZIO[Any, Nothing, Unit] =
+    ZIO.attemptBlocking(Thread.sleep(duration.toMillis)).orDie
 
-  val testProgram: ZIO[Any, Throwable, Unit] = ZIO.scoped {
-    val testAppLayer = ZLayer.make[BookEndpoint & AwsEventEndpoint & Client](
-      Main.clientLayer,
-      AppConfig.live.tap(_ => ZIO.logInfo("Configuration loaded for test")),
-      Authentication.live,
-      AwsSecretsManager.live,
-      AwsEnvironment.live,
-      BookRepo.mock, // Use mock repositories for tests
-      BookEndpoint.live,
-      AwsEventEndpoint.live
-    )
+  def loopUntilVersionChanges(
+      authToken: String,
+      version: Int,
+      retriesLeft: Int
+  ): ZIO[Client, Throwable, Int] =
+    if (retriesLeft <= 0) {
+      ZIO.fail(new RuntimeException("Max retries reached without a version change"))
+    } else {
+      (for {
+        verResp    <- Client.batched(Request.get("https://localhost:8073/key_bundle_version")
+                        .addHeader(Header.Authorization.Bearer(authToken)))
+                        .timeout(5.seconds) // Add timeout
+                        .flatMap {
+                          case Some(response) => ZIO.succeed(response)
+                          case None           => ZIO.fail(new RuntimeException("Request timed out"))
+                        }
+        verStr     <- verResp.body.asString
+        currentVer =  verStr.toInt
+        result     <- if (currentVer != version) then
+                        ZIO.succeed( currentVer ) // Return when the version changes
+                      else
+                        realTimeDelay(1.second) *>
+                        loopUntilVersionChanges(authToken, version, retriesLeft - 1)
+      } yield result
+      ).provideLayer(Client.default)
+    }
 
-    Main.program.provideSomeLayer[Scope](testAppLayer ++ Main.serverLayer ++ Main.clientLayer)
-  }
-
-  /*
-  val testProgram2: ZIO[Any, Throwable, Unit] = ZIO.scoped {
-    val testAppLayer = ZLayer.make[BookEndpoint & AwsEventEndpoint & Client](
-      Main.clientLayer,
-      AppConfig.live.tap(_ => ZIO.logInfo("Configuration loaded for test")),
-      Authentication.live,
-      AwsSecretsManager.live,
-      AwsEnvironment.live,
-      BookRepo.mock,
-      BookEndpoint.live,
-      AwsEventEndpoint.live
-    )
-
-    for {
-      // Start the server in a fiber
-      bookEndpoint     <- ZIO.service[BookEndpoint]
-      awsEventEndpoint <- ZIO.service[AwsEventEndpoint]
-      routes            = bookEndpoint.routes ++ awsEventEndpoint.routes
-      _ <- ZIO.logInfo("Starting test server...")
-      serverFiber <- Server
-                      .serve(routes)
-                      .provide(Main.serverLayer)
-                      .fork
-      _ <- ZIO.addFinalizer(serverFiber.interrupt) // Stop the server when tests complete
-
-      // Wait for the server to become ready
-      client <- ZIO.service[Client]
-      _ <- client
-            .request(Request.get("https://localhost:8073/login"))
-            .retry(Schedule.fixed(100.millis) && Schedule.recurs(30))
-            .tapError(_ => ZIO.logError("Readiness check failed"))
-            .orElseFail(new RuntimeException("Server failed to start within the timeout."))
-      _ <- ZIO.logInfo("Test server is ready!")
-    } yield ()
-  }.provideSomeLayer[Scope](Main.serverLayer ++ Main.clientLayer)
-  */
-
-  override def spec = suite("Integration Test - AuthServiceSpec")(
+  override def spec = suite("Integration Test - Authentication")(
     test("Login should succeed") {
       for {
-        // response <- Client.batched(Request.get("http://localhost:8073/test"))
         response <- Client.batched(Request.get("https://localhost:8073/login"))
-        body <- response.body.asString
-      } yield assert(response.status)(equalTo(Status.Ok)) &&
-        assert(body)(equalTo("Server is running!"))
+        body     <- response.body.asString
+        tokens   <- ZIO.fromEither(body.fromJson[TokenBundle]) // Decode the JSON into a TokenBundle
+                      .mapError(error => new RuntimeException(s"Failed to decode JSON: $error"))
+      } yield assert(response.status)(equalTo(Status.Ok)) // implicitly tokens are fine if they parsed successfully
     },
-  ).provideLayer(Main.clientLayer) @@ TestAspect.beforeAll(testProgram.orDie) @@ TestAspect.sequential
-  // ).provideLayer(Main.clientLayer) @@ TestAspect.beforeAll(testProgram.orDie) @@ TestAspect.sequential
-
-
-      // } yield assert(response.status)(equalTo(Status.Ok)) &&
-      //   assert(body)(equalTo("Expceted"))
-  // ).provideLayer(testLayer) @@ TestAspect.sequential
-
-  // Use this in case of SSL errors
-  // val testClientLayer: ZLayer[Any, Throwable, Client] = ZLayer.make[Client](
-  //   ZLayer.succeed(ZClient.Config.default.ssl(SslConfig.unsafeDisableCertificateValidation)),
-  //     Client.customized,
-  //     NettyClientDriver.live,
-  //     DnsResolver.default,
-  //     ZLayer.succeed(NettyConfig.defaultWithFastShutdown)
-  //   )
-  
-}
-
-
-    /*
+    test("Valid auth token should work") {
+      for {
+        response  <- Client.batched(Request.get("https://localhost:8073/login"))
+        body      <- response.body.asString
+        tokens    <- ZIO.fromEither(body.fromJson[TokenBundle]) // Decode the JSON into a TokenBundle
+                      .mapError(error => new RuntimeException(s"Failed to decode JSON: $error"))
+        response2 <- Client.batched(Request.get("https://localhost:8073/hello").addHeader(Header.Authorization.Bearer(tokens.authToken)))
+        msg      <- response2.body.asString
+      } yield assert(response2.status)(equalTo(Status.Ok)) &&
+        assert(msg)(equalTo("Hello, World, bogus_user!"))
+    },
     test("Token decoding should fail upon token expiry") {
       for {
-        auth     <- ZIO.service[Authentication]
-        curKeyBundle = auth.asInstanceOf[LiveAuthentication].getKeyBundle
-        loginTokens <- auth.login("TestUser", "blah")
-        _        <- TestClock.adjust(421.seconds)
-        result   <- auth.asInstanceOf[LiveAuthentication].decodeToken(loginTokens.authToken,None).either
-      } yield result match {
-        case Left(response) =>
-          assert(response.status)(equalTo(Status.Unauthorized)) // Assert the error Response
-        case Right(_) =>
-          assert(false)(equalTo(true)) // Fail the test if no error occurs
-      }
+        response   <- Client.batched(Request.get("https://localhost:8073/login"))
+        body       <- response.body.asString
+        tokens     <- ZIO.fromEither(body.fromJson[TokenBundle]) // Decode the JSON into a TokenBundle
+                      .mapError(error => new RuntimeException(s"Failed to decode JSON: $error"))
+        
+        expResp    <- Client.batched(Request.post("https://localhost:8073/expire_token?seconds=421", Body.empty)
+                        .addHeader(Header.Authorization.Bearer(tokens.authToken)))
+        expToken   <- response.body.asString
+
+        response2 <- Client.batched(Request.get("https://localhost:8073/hello").addHeader(Header.Authorization.Bearer(expToken)))
+      } yield assert(response2.status)(equalTo(Status.Unauthorized))
     },
-    test("Token refresh should succeed upon token expiry and the presence of a valid session token") {
+    test("Token refresh should succeed upon token expiry and the presence of a valid session token (refresh must work)") {
       for {
-        auth     <- ZIO.service[Authentication]
-        curKeyBundle = auth.asInstanceOf[LiveAuthentication].getKeyBundle
-        loginTokens <- auth.login("TestUser", "blah")
-        _        <- TestClock.adjust(421.seconds)
-        result1  <- auth.asInstanceOf[LiveAuthentication].decodeToken(loginTokens.authToken,None).either // expired
-        result2  <- auth.asInstanceOf[LiveAuthentication].decodeToken(loginTokens.authToken,Some(loginTokens.sessionToken)).either
-      } yield result1 match {
-        case Left(response) =>
-          assert(response.status)(equalTo(Status.Unauthorized)) // Assert the error Response
-          result2 match {
-            case Left(response) =>
-              assert(false)(equalTo(true)) // Fail the test if error occurs
-            case Right((newAuthToken, session)) =>
-              assert(newAuthToken)(not(isNone)) && assert(session)(equalTo(Session("TestUser")))
+        // Log in
+        response   <- Client.batched(Request.get("https://localhost:8073/login"))
+        body       <- response.body.asString
+        tokens     <- ZIO.fromEither(body.fromJson[TokenBundle]) // Decode the JSON into a TokenBundle
+                      .mapError(error => new RuntimeException(s"Failed to decode JSON: $error"))
+        
+        // Get an intentionally expired token
+        expResp    <- Client.batched(Request.post("https://localhost:8073/expire_token?seconds=410&isSession=false", Body.empty)
+                        .addHeader(Header.Authorization.Bearer(tokens.authToken)))
+        expToken   <- expResp.body.asString
+
+        // Confirm it's expired by retrying the hello endpoint with it
+        unauth     <- Client.batched(Request.get("https://localhost:8073/hello").addHeader(Header.Authorization.Bearer(expToken)))
+
+        // Retry with the expired token but also include the session token to trigger a token refresh
+        retry      <- Client.batched(Request.get("https://localhost:8073/hello")
+                        .addHeader("X-Session-Token", tokens.sessionToken)
+                        .addHeader(Header.Authorization.Bearer(expToken)))
+        // Get the new auth token out of the header of the (successful) retry response
+        freshToken <- 
+          retry.headers.header(Header.Authorization) match {
+            case Some(Header.Authorization.Bearer(token)) => ZIO.succeed(token.value.asString)
+            case _ => ZIO.fail(new RuntimeException("Authorization header is missing or incorrect."))
           }
-        case Right(_) =>
-          assert(false)(equalTo(true)) // Fail the test if no error occurs
-      }
+        
+        // Verify the new token works
+        verify     <- Client.batched(Request.get("https://localhost:8073/hello")
+                        .addHeader(Header.Authorization.Bearer(freshToken)))
+        msg        <- verify.body.asString
+      } yield assert(unauth.status)(equalTo(Status.Unauthorized)) &&
+          assert(retry.status)(equalTo(Status.Ok)) &&
+          assert(verify.status)(equalTo(Status.Ok)) &&
+          assert(msg)(equalTo("Hello, World, bogus_user!"))
     },
     test("Token refresh should fail upon token expiry and the presence of an valid session token outside refresh window") {
       for {
-        auth     <- ZIO.service[Authentication]
-        curKeyBundle = auth.asInstanceOf[LiveAuthentication].getKeyBundle
-        loginTokens <- auth.login("TestUser", "blah")
-        _        <- TestClock.adjust(841.seconds)
-        result1  <- auth.asInstanceOf[LiveAuthentication].decodeToken(loginTokens.authToken,None).either // expired
-        result2  <- auth.asInstanceOf[LiveAuthentication].decodeToken(loginTokens.authToken,Some(loginTokens.sessionToken)).either
-      } yield result1 match {
-        case Left(response) =>
-          assert(response.status)(equalTo(Status.Unauthorized)) // Assert the error Response
-          result2 match {
-            case Left(response) =>
-              assert(response.status)(equalTo(Status.Unauthorized)) // Assert the error Response
-            case Right((newAuthToken, session)) =>
-              assert(false)(equalTo(true)) // Fail the test if error occurs
-          }
-        case Right(_) =>
-          assert(false)(equalTo(true)) // Fail the test if no error occurs
-      }
+        // Log in
+        response   <- Client.batched(Request.get("https://localhost:8073/login"))
+        body       <- response.body.asString
+        tokens     <- ZIO.fromEither(body.fromJson[TokenBundle]) // Decode the JSON into a TokenBundle
+                      .mapError(error => new RuntimeException(s"Failed to decode JSON: $error"))
+        
+        // Get an intentionally expired token
+        expResp    <- Client.batched(Request.post("https://localhost:8073/expire_token?seconds=422&isSession=false", Body.empty) // expired auth token too old
+                        .addHeader(Header.Authorization.Bearer(tokens.authToken)))
+        expToken   <- expResp.body.asString
+
+        // Confirm it's expired by retrying the hello endpoint with it
+        unauth     <- Client.batched(Request.get("https://localhost:8073/hello").addHeader(Header.Authorization.Bearer(expToken)))
+
+        // Retry with the expired token but also include the session token, but this time refresh will fail--too long since expiry
+        retry      <- Client.batched(Request.get("https://localhost:8073/hello")
+                        .addHeader("X-Session-Token", tokens.sessionToken)
+                        .addHeader(Header.Authorization.Bearer(expToken)))
+      } yield assert(unauth.status)(equalTo(Status.Unauthorized)) &&
+          assert(retry.status)(equalTo(Status.Unauthorized))
     },
     test("Token refresh should fail upon token expiry and the presence of an expired session token") {
       for {
-        auth         <- ZIO.service[Authentication]
-        curKeyBundle = auth.asInstanceOf[LiveAuthentication].getKeyBundle
-        loginTokens  <- auth.login("TestUser", "blah")
-        _            <- TestClock.adjust(7201.seconds)
-        result1      <- auth.asInstanceOf[LiveAuthentication].decodeToken(loginTokens.authToken,None).either // expired
-        result2      <- auth.asInstanceOf[LiveAuthentication].decodeToken(loginTokens.authToken,Some(loginTokens.sessionToken)).either
-      } yield result1 match {
-        case Left(response) =>
-          assert(response.status)(equalTo(Status.Unauthorized)) // Assert the error Response
-          result2 match {
-            case Left(response) =>
-              assert(response.status)(equalTo(Status.Unauthorized)) // Assert the error Response
-            case Right((newAuthToken, session)) =>
-              assert(false)(equalTo(true)) // Fail the test if error occurs
+        // Log in
+        response   <- Client.batched(Request.get("https://localhost:8073/login"))
+        body       <- response.body.asString
+        tokens     <- ZIO.fromEither(body.fromJson[TokenBundle]) // Decode the JSON into a TokenBundle
+                      .mapError(error => new RuntimeException(s"Failed to decode JSON: $error"))
+        
+        // Get an intentionally expired auth token (inside refresh window)
+        expResp    <- Client.batched(Request.post("https://localhost:8073/expire_token?seconds=410&isSession=false", Body.empty) // expired auth token too old
+                        .addHeader(Header.Authorization.Bearer(tokens.authToken)))
+        expToken   <- expResp.body.asString
+
+        // Get an intentionally expired session token
+        sessResp   <- Client.batched(Request.post("https://localhost:8073/expire_token?seconds=10&isSession=true", Body.empty) // expired auth token too old
+                        .addHeader(Header.Authorization.Bearer(tokens.authToken)))
+        sessToken  <- expResp.body.asString
+
+        // Retry with the expired token but also include the session token, but this time refresh will fail--too long since expiry
+        retry      <- Client.batched(Request.get("https://localhost:8073/hello")
+                        .addHeader("X-Session-Token", sessToken)
+                        .addHeader(Header.Authorization.Bearer(expToken)))
+      } yield assert(retry.status)(equalTo(Status.Unauthorized))
+    },
+    test("Unexpired tokens work immediately after secret key rotation (using previous key), and refreshed token issued in response") {
+      for {
+        // Log in
+        response   <- Client.batched(Request.get("https://localhost:8073/login"))
+        body       <- response.body.asString
+        tokens     <- ZIO.fromEither(body.fromJson[TokenBundle]) // Decode the JSON into a TokenBundle
+                      .mapError(error => new RuntimeException(s"Failed to decode JSON: $error"))
+
+        // Get the current key bundle version
+        verResp    <- Client.batched(Request.get("https://localhost:8073/key_bundle_version")
+                        .addHeader(Header.Authorization.Bearer(tokens.authToken)))
+        verStr     <- verResp.body.asString
+        initVer    =  verStr.toInt
+
+        // Call aws to rotate secret keys here then wait for the key bundle version to change
+        _          <- ZIO.attempt{
+                        val client = SecretsManagerClient.builder()
+                          .region(software.amazon.awssdk.regions.Region.US_EAST_1) // Set region
+                          .endpointOverride(new java.net.URI("http://localhost:4566")) // LocalStack endpoint
+                          .build()
+
+                        // Define the request to rotate the secret
+                        val request = RotateSecretRequest.builder()
+                          .secretId("MySecretKey") // Secret ID
+                          .rotationLambdaARN("arn:aws:lambda:us-east-1:000000000000:function:RotateSecretFunction") // Lambda ARN
+                          .rotationRules(RotationRulesType.builder()
+                            .automaticallyAfterDays(30) // Rotation frequency in days
+                            .build())
+                          .build()
+
+                        client.rotateSecret(request)
           }
-        case Right(_) =>
-          assert(false)(equalTo(true)) // Fail the test if no error occurs
-      }
+        _          <- loopUntilVersionChanges(tokens.authToken, initVer, 10)  // don't care what the new version is--just that it changes
+
+        // Now test the old token with the previous key -- should work and return a new token
+        retry      <- Client.batched(Request.get("https://localhost:8073/hello")
+                        .addHeader(Header.Authorization.Bearer(tokens.authToken)))
+
+        // Get the new auth token out of the header of the (successful) retry response
+        freshToken <- 
+          retry.headers.header(Header.Authorization) match {
+            case Some(Header.Authorization.Bearer(token)) => ZIO.succeed(token.value.asString)
+            case _ => ZIO.fail(new RuntimeException("Authorization header is missing or incorrect."))
+          }
+        
+        // Verify the new token works
+        verify     <- Client.batched(Request.get("https://localhost:8073/hello")
+                        .addHeader(Header.Authorization.Bearer(freshToken)))
+        msg        <- verify.body.asString
+      } yield assert(retry.status)(equalTo(Status.Ok)) &&
+          assert(verify.status)(equalTo(Status.Ok)) &&
+          assert(freshToken)(not(equalTo(tokens.authToken))) &&
+          assert(msg)(equalTo("Hello, World, bogus_user!"))
     },
-    test("Secret Key rotation works") {
-      for {
-        auth           <- ZIO.service[Authentication]
-        curKeyBundle   =  auth.asInstanceOf[LiveAuthentication].getKeyBundle
-        _              <- auth.updateKeys
-        curKeyBundle2  =  auth.asInstanceOf[LiveAuthentication].getKeyBundle
-      } yield assert(curKeyBundle2.previousTokenKey.get)(equalTo(curKeyBundle.currentTokenKey)) &&
-        assert(curKeyBundle2.currentTokenKey)(not(equalTo(curKeyBundle.currentTokenKey)))
-    },
-    test("After Secret Key rotation, old tokens should work with the previous key if they are not otherwise expired (new token generated)") {
-      for {
-        auth     <- ZIO.service[Authentication]
-        curKeyBundle = auth.asInstanceOf[LiveAuthentication].getKeyBundle
-        loginTokens <- auth.login("TestUser", "blah")
-        _        <- auth.updateKeys
-        result   <- auth.asInstanceOf[LiveAuthentication].decodeToken(loginTokens.authToken, None)
-      } yield assert(result._2)(equalTo(Session("TestUser"))) &&
-        assert(result._1)((not(isNone))) &&
-        assert(result._1.get)(not(equalTo(loginTokens.authToken)))
-    },
-    test("After Secret Key rotation, a server may have missed the rotate-secret message and not have any current token") {
-      for {
-        clock    <- ZIO.clock
-        auth     <- ZIO.service[Authentication]
-        keyMgr   <- ZIO.service[AwsSecretsManager]
-        keys     <- keyMgr.getSecretKey  // rotate the keys but don't tell Authentication with auth.updateKeys
-        token    <- JwtToken.jwtEncode("TestUser", keys.currentTokenKey.value, 3600)(clock)
-        result   <- auth.asInstanceOf[LiveAuthentication].decodeToken(token,None).either
-      } yield result match {
-        case Left(response) =>
-          assert(response.status)(equalTo(Status.Unauthorized)) // Assert the error Response
-        case Right(_) =>
-          assert(false)(equalTo(true)) // Fail the test if no error occurs
-      }
-    },
-    */
+  ).provideLayer(Client.default ++ ZLayer.succeed(Clock)) @@ TestAspect.sequential
  
-
-    //-----------
-
-
-    /* 
-      /*
-  val testLayer: ZLayer[Any, Throwable, Server & Client] = {
-    val readinessCheck: ZIO[Client, Throwable, Unit] = for {
-      _ <- ZIO.logInfo("Starting readiness check...")
-      client <- ZIO.service[Client]
-      _ <- client
-            .request(Request.get("http://localhost:8073/login"))
-            .retry(Schedule.fixed(100.millis) && Schedule.recurs(30))
-            .tapError(_ => ZIO.logError("Readiness check failed"))
-            .orElseFail(new RuntimeException("Server failed to start within the timeout."))
-      _ <- ZIO.logInfo("Server is ready!")
-    } yield ()
-
-    ZLayer.scoped {
-      for {
-        scope <- ZIO.scope
-        env   <- (Main.serverLayer ++ Main.clientLayer).build.provideEnvironment(ZEnvironment(scope)) // Build the environment
-        _     <- readinessCheck.provideEnvironment(env) // Run readiness check within the built environment
-      } yield env
-    }
-  }
-  */
-
-  val app = Routes(
-    Method.GET / "test" -> handler { Response.text("Server is running!") }
-  )
-
-  val secureServerConfig: Server.Config => zio.http.Server.Config = 
-    (config: Server.Config) => config.port(8073)
-
-  // Server layer with configuration
-  val serverLayer: ZLayer[Any, Throwable, Unit] = ZLayer.scoped {
-    for {
-      _ <- Server
-             .serve(app)
-             .provide(
-               Server.defaultWith(secureServerConfig) // Set host and port
-             ).fork
-      _ <- ZIO.logInfo("Server started on http://localhost:8073")
-    } yield ()
-  }
-
-    
-     */
+}
