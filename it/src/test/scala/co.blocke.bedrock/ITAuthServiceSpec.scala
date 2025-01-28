@@ -66,9 +66,19 @@ object ITAuthServiceSpec extends ZIOSpecDefault {
       } yield assert(response2.status)(equalTo(Status.Ok)) &&
         assert(msg)(equalTo("Hello, World, bogus_user!"))
     },
+    test("Token decoding should fail if endpoint has role permissions the user doesn't have") {
+      for {
+        response  <- Client.batched(Request.get("https://localhost:8073/login"))
+        body      <- response.body.asString
+        tokens    <- ZIO.fromEither(body.fromJson[TokenBundle]) // Decode the JSON into a TokenBundle
+                      .mapError(error => new RuntimeException(s"Failed to decode JSON: $error"))
+        response2 <- Client.batched(Request.post("https://localhost:8073/expire_token?seconds=421", Body.empty)
+                      .addHeader(Header.Authorization.Bearer(tokens.authToken)))
+      } yield assert(response2.status)(equalTo(Status.Unauthorized))
+    },
     test("Token decoding should fail upon token expiry") {
       for {
-        response   <- Client.batched(Request.get("https://localhost:8073/login"))
+        response   <- Client.batched(Request.get("https://localhost:8073/login?userid=TestUser"))
         body       <- response.body.asString
         tokens     <- ZIO.fromEither(body.fromJson[TokenBundle]) // Decode the JSON into a TokenBundle
                       .mapError(error => new RuntimeException(s"Failed to decode JSON: $error"))
@@ -83,7 +93,7 @@ object ITAuthServiceSpec extends ZIOSpecDefault {
     test("Token refresh should succeed upon token expiry and the presence of a valid session token (refresh must work)") {
       for {
         // Log in
-        response   <- Client.batched(Request.get("https://localhost:8073/login"))
+        response   <- Client.batched(Request.get("https://localhost:8073/login?userid=TestUser"))
         body       <- response.body.asString
         tokens     <- ZIO.fromEither(body.fromJson[TokenBundle]) // Decode the JSON into a TokenBundle
                       .mapError(error => new RuntimeException(s"Failed to decode JSON: $error"))
@@ -114,12 +124,12 @@ object ITAuthServiceSpec extends ZIOSpecDefault {
       } yield assert(unauth.status)(equalTo(Status.Unauthorized)) &&
           assert(retry.status)(equalTo(Status.Ok)) &&
           assert(verify.status)(equalTo(Status.Ok)) &&
-          assert(msg)(equalTo("Hello, World, bogus_user!"))
+          assert(msg)(equalTo("Hello, World, TestUser!"))
     },
     test("Token refresh should fail upon token expiry and the presence of an valid session token outside refresh window") {
       for {
         // Log in
-        response   <- Client.batched(Request.get("https://localhost:8073/login"))
+        response   <- Client.batched(Request.get("https://localhost:8073/login?userid=TestUser"))
         body       <- response.body.asString
         tokens     <- ZIO.fromEither(body.fromJson[TokenBundle]) // Decode the JSON into a TokenBundle
                       .mapError(error => new RuntimeException(s"Failed to decode JSON: $error"))
@@ -142,7 +152,7 @@ object ITAuthServiceSpec extends ZIOSpecDefault {
     test("Token refresh should fail upon token expiry and the presence of an expired session token") {
       for {
         // Log in
-        response   <- Client.batched(Request.get("https://localhost:8073/login"))
+        response   <- Client.batched(Request.get("https://localhost:8073/login?userid=TestUser"))
         body       <- response.body.asString
         tokens     <- ZIO.fromEither(body.fromJson[TokenBundle]) // Decode the JSON into a TokenBundle
                       .mapError(error => new RuntimeException(s"Failed to decode JSON: $error"))
@@ -166,7 +176,7 @@ object ITAuthServiceSpec extends ZIOSpecDefault {
     test("Unexpired tokens work immediately after secret key rotation (using previous key), and refreshed token issued in response") {
       for {
         // Log in
-        response   <- Client.batched(Request.get("https://localhost:8073/login"))
+        response   <- Client.batched(Request.get("https://localhost:8073/login?userid=TestUser"))
         body       <- response.body.asString
         tokens     <- ZIO.fromEither(body.fromJson[TokenBundle]) // Decode the JSON into a TokenBundle
                       .mapError(error => new RuntimeException(s"Failed to decode JSON: $error"))
@@ -215,7 +225,7 @@ object ITAuthServiceSpec extends ZIOSpecDefault {
       } yield assert(retry.status)(equalTo(Status.Ok)) &&
           assert(verify.status)(equalTo(Status.Ok)) &&
           assert(freshToken)(not(equalTo(tokens.authToken))) &&
-          assert(msg)(equalTo("Hello, World, bogus_user!"))
+          assert(msg)(equalTo("Hello, World, TestUser!"))
     },
   ).provideLayer(Client.default ++ ZLayer.succeed(Clock)) @@ TestAspect.sequential
  

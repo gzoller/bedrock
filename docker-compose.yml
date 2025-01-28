@@ -41,9 +41,14 @@ services:
         condition: service_healthy
     ports:
       - 8073:8073 # Expose your server's port
+    volumes:
+      - "./certs/server.crt:/certs/server.crt" # Mount the certificate
+      - "./certs/server.key:/certs/server.key"
     environment:
       - JAVA_OPTS=-Djava.net.preferIPv4Stack=true
       - LOCALSTACK_URL=http://localstack:4566
+      - SERVER_CERT_PATH=/certs/server.crt
+      - SERVER_KEY_PATH=/certs/server.key
     healthcheck:
       test: ["CMD", "curl", "-fk", "https://bedrock:8073/health"]
       interval: 5s

@@ -83,7 +83,7 @@ object BookServiceSpec extends ZIOSpecDefault {
   def spec = suite("BookServiceSpec")(
     test("Unauthorized access should fail (no token)") {
       val request = Request.get(URL.root / "hello")
-      val session = Session("bogus_user") // Create a bogus session
+      val session = Session("bogus_user", List.empty[String]) // Create a bogus session
       for {
         bookService <- ZIO.service[LiveBookEndpoint]
         response    <- bookService.helloRoute
@@ -93,7 +93,7 @@ object BookServiceSpec extends ZIOSpecDefault {
       } yield assert(response.status)(equalTo(Status.Unauthorized))
     },
     test("Unauthorized access should fail (bad token)") {
-      val session = Session("bogus_user") // Create a bogus session
+      val session = Session("bogus_user", List.empty[String]) // Create a bogus session
       for {
         clock       <- ZIO.clock
         bogus_token =  Jwt.encode(JwtClaim(subject = Some("bogus_user"))
@@ -134,7 +134,7 @@ object BookServiceSpec extends ZIOSpecDefault {
     },
     test("authenticated request should return a list of books for a valid query") {
       val request = Request.get((URL.root / "books").addQueryParams("q=zio&num=2")).addHeader(Header.Authorization.Bearer(tokens.authToken))
-      val session = Session("bogus_user") // Create a bogus session
+      val session = Session("bogus_user", List.empty[String]) // Create a bogus session
       val expectedResponse = """[{"title":"ZIO in Action","authors":["John Doe"],"year":2021}]"""
       for {
         bookService <- ZIO.service[LiveBookEndpoint]

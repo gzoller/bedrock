@@ -1,4 +1,3 @@
-import sbtassembly.AssemblyPlugin.autoImport.*
 import scala.sys.process.*
 
 enablePlugins(BuildInfoPlugin)
@@ -20,32 +19,11 @@ lazy val root = (project in file("."))
     // Global / excludeLintKeys += buildInfoKeys, // Suppress annoying lint message about unused keys
     // Global / excludeLintKeys += buildInfoPackage, 
 
-    // TODO: Use a better assembler-packager like sbt-native-packager
-    assembly / assemblyMergeStrategy := {
-      {
-        case "module-info.class" => MergeStrategy.discard
-        case PathList("META-INF", xs @ _*) => MergeStrategy.discard
-        case PathList("reference.conf")    => MergeStrategy.concat
-        case x =>
-          val oldStrategy = (ThisBuild / assemblyMergeStrategy).value
-          oldStrategy(x)
-      }
-    },
-
-    // assembly / assemblyMergeStrategy := {
-    //   case PathList("META-INF", "services", xs @ _*) => MergeStrategy.concat
-    //   case PathList("META-INF", xs @ _*)             => MergeStrategy.discard
-    //   case "logback.xml"                             => MergeStrategy.first
-    //   case x                                         => (assembly / assemblyMergeStrategy).value(x)
-    // },
 
     ThisBuild / scalacOptions ++= Seq(
       "-Wunused:imports", // Warn on unused imports
       "-explain-cyclic"
     ),
-
-    // Include the /certs directory in the resource files
-    Compile / unmanagedResourceDirectories += baseDirectory.value / "certs",
     
     libraryDependencies ++= Seq(
       // ---- ZIO
@@ -85,7 +63,7 @@ lazy val root = (project in file("."))
 
     // Docker packaging settings
     dockerExposedPorts += 8073,
-    dockerBaseImage := "openjdk:22",
+    dockerBaseImage := "openjdk:21",
     dockerBuildOptions += "--no-cache"
   )
   
@@ -104,6 +82,8 @@ lazy val integrationTests = (project in file("it"))
     testFrameworks += new TestFramework("zio.test.sbt.ZTestFramework"),
 
     // Proper lazy evaluation for test execution
+    // NOTE: All this drama below is actually very useful. Its starts "docker-compose up" before
+    // running the integration tests, and stops it after the tests.
     Test / test := Def.taskDyn {
       import scala.sys.process._
       import scala.util.control.Breaks._

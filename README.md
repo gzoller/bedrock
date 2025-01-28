@@ -12,10 +12,13 @@ Starting point for REST service
 * [Auth using tokens (endpoint protection) incl rotating keys and tokens)](docs/security.md)
 * Get access to the encoded user id from jtw token in handler
 * LocalStack support for running locally and integration testing
+* Bedrock Auth (OAuth-lite) including:
+  - Token rotation/expiration
+  - Session (refresh) tokens
+  - Role-based endpoint protection
 
 IN-PROGRESS:
-* Figure out how to do integration testing in sbt
-* Separate unit and integration tests with mocks for unit
+* Figure out OAuth
 * Figure out config w/env vars that override, eg IS_LIVE to know if we're running live or locally
 
 DEPLOYMENT/AWS:
@@ -24,10 +27,13 @@ DEPLOYMENT/AWS:
 TODO:
 * Auto-generate Swagger config (fixed with my own mods to ZIO HTTP...PR pending)
 * Hide server.crt/server.key files but ensure they're published & packaged correctly
-* Figure out OAuth
 * Figure out packaging (Docker, versioning, deployment, local/AWS)
 * Figure out Kuberneties
-* Figure out Teraform
+* Figure out Terraform
+   -- Using TF to replace all the AWS CLI commands I use with LocalStack (there won't be LocalStack obviously in AWS)
+   -- Configure multiple environments with different TF specs: dev, test, stage, prod
+   -- Configure github workflows manually trigger deployments to different envs
+   -- Figure out AWS permissioning so a low-level dev can't deploy to prod but a sr-dev could
 * Figure out monitoring
 * Figure out advanced logging (eg with queries like splunk)
 * Investingate queryable event queue

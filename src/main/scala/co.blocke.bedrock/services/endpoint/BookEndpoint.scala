@@ -55,7 +55,7 @@ final case class LiveBookEndpoint( auth: Authentication, bookRepo: BookRepo ) ex
   val book_handler: Handler[Session, Nothing, (String,Int), List[Book]] = handler { (query: String, num: Int) =>
     withContext((session: Session) => bookRepo.find(query) )
   }
-  val bookSearchRoute: Routes[Any, Nothing] = Routes(book_endpoint.implementHandler(book_handler)) @@ auth.bearerAuthWithContext
+  val bookSearchRoute: Routes[Any, Nothing] = Routes(book_endpoint.implementHandler(book_handler)) @@ auth.bearerAuthWithContext()
 
 
   // --------- Hello message
@@ -69,23 +69,27 @@ final case class LiveBookEndpoint( auth: Authentication, bookRepo: BookRepo ) ex
       s"Hello, World, ${session.userId}!"
     }
   }
-  val helloRoute: Routes[Any, Nothing] = Routes(hello_endpoint.implementHandler(hello_handler)) @@ auth.bearerAuthWithContext
+  val helloRoute: Routes[Any, Nothing] = Routes(hello_endpoint.implementHandler(hello_handler)) @@ auth.bearerAuthWithContext()
 
 
   // --------- Login message
   //===============================================================
-  val login_endpoint: Endpoint[Unit, Unit, Either[GeneralFailure, BadCredentialError], TokenBundle, zio.http.endpoint.AuthType.None.type] = Endpoint((RoutePattern.GET / "login") ?? Doc.p("Mock of a user login form to obtain auth token"))
-    .out[TokenBundle](Doc.p("Got me a token!"))
-    .outError[BadCredentialError](Status.Unauthorized)
-    .outError[GeneralFailure](Status.InternalServerError)
+  val login_endpoint: Endpoint[Unit, Option[String], Either[GeneralFailure, BadCredentialError], TokenBundle, zio.http.endpoint.AuthType.None.type] = 
+    Endpoint((RoutePattern.GET / "login") ?? Doc.p("Mock of a user login form to obtain auth token"))
+      .query(HttpCodec.query[Option[String]]("userid").examples (("example1", Some("mbarnes@foo.com"))) ?? Doc.p(
+            "Query parameter for searching books"
+          ))
+      .out[TokenBundle](Doc.p("Got me a token!"))
+      .outError[BadCredentialError](Status.Unauthorized)
+      .outError[GeneralFailure](Status.InternalServerError)
 
   // In real life user id and password would be submitted via a web form (POST). The user/pwd looked up in some table,
   // and finally the userId + secret would be used to encode a token. Possibly we might want to encode a session id
   // instead of userId, if a session context is desirable.
 
-  val login_handler: Handler[Any, Either[GeneralFailure, BadCredentialError], Unit, TokenBundle] =
-    Handler.fromFunctionZIO { (_: Unit) =>
-      auth.login("bogus_user", "pwd")
+  val login_handler: Handler[Any, Either[GeneralFailure, BadCredentialError], Option[String], TokenBundle] =
+    Handler.fromFunctionZIO { (user: Option[String]) =>
+      auth.login(user.getOrElse("bogus_user"), "pwd")
     }
 
   val loginRoute: Routes[Any, Nothing] = Routes(login_endpoint.implementHandler(login_handler))

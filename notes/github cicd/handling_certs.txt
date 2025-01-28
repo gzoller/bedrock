@@ -1,0 +1,65 @@
+
+Step 1 >>>
+
+We need to put server.crt and sever.key into GitHub secrets called SERVER_CERT and SERVER_KEY respectively
+
+
+Step 2 >>>
+
+Extract certs in workflow into a temporary directory (an ephemoral container than rulivesns just for a CICD run)
+
+yaml>
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Set up certificates
+        run: |
+          mkdir -p certs
+          echo "$SERVER_CERT" > certs/server.crt
+          echo "$SERVER_KEY" > certs/server.key
+
+
+Step 3 >>>
+
+docker-compose.yml would copy these files into their proper places just like we do locally
+
+
+========
+
+Full (maybe working?) Exmple -- thx chat:
+
+name: CI/CD Pipeline
+
+on:
+  push:
+    branches:
+      - main
+
+jobs:
+  build-and-test:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v3
+
+      - name: Setup certificates
+        run: |
+          mkdir -p certs
+          echo "$SERVER_CERT" > certs/server.crt
+          echo "$SERVER_KEY" > certs/server.key
+        env:
+          SERVER_CERT: ${{ secrets.SERVER_CERT }}
+          SERVER_KEY: ${{ secrets.SERVER_KEY }}
+
+      - name: Set up JDK and SBT
+        uses: coursier/setup-action@v1
+        with:
+          java-version: 21
+
+      - name: Build Docker image and run integration tests
+        run: sbt docker:publishLocal integrationTests/test

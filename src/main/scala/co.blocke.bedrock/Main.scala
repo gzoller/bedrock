@@ -13,10 +13,10 @@ import services.endpoint.{BookEndpoint, HealthEndpoint}
 
 object Main extends ZIOAppDefault {
 
-  val sslConfig: SSLConfig = SSLConfig.fromResource(
+  val sslConfig: SSLConfig = SSLConfig.fromFile(
     behaviour = SSLConfig.HttpBehaviour.Fail,
-    certPath = "server.crt",
-    keyPath = "server.key"
+    certPath = sys.env.getOrElse("SERVER_CERT_PATH",""), // crash if you can't find these
+    keyPath = sys.env.getOrElse("SERVER_KEY_PATH","")
   )
   val secureServerConfig: Server.Config => zio.http.Server.Config = 
     (config: Server.Config) => config.port(8073).ssl(sslConfig)

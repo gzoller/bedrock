@@ -5,6 +5,7 @@ package auth
 import co.blocke.bedrock.services.auth.JwtToken.TokenError
 import zio.*
 import zio.http.*
+import pdi.jwt.JwtClaim
 
 import aws.{AwsSecretsManager, KeyBundle}
 
@@ -12,7 +13,7 @@ import aws.{AwsSecretsManager, KeyBundle}
 trait Authentication:
   def login(username: String, password: String): ZIO[Any, Either[GeneralFailure, BadCredentialError], TokenBundle] // returns a token
   def updateKeys: ZIO[Any, Throwable, Unit]
-  def bearerAuthWithContext: HandlerAspect[Any, Session]
+  def bearerAuthWithContext(roles: List[String] = List.empty[String]): HandlerAspect[Any, Session]
   def issueExpiredToken(expiredBySec: Long, subject: String, isSession: Boolean): ZIO[Any, Throwable, String]  // used only for integration testing
   def getKeyBundleVersion: UIO[Int]
 
@@ -32,10 +33,8 @@ final case class LiveAuthentication(
   def getKeyBundleVersion: UIO[Int] = ZIO.succeed(keyBundleVersion)
 
   def issueExpiredToken(expiredBySec: Long, subject: String, isSession: Boolean): ZIO[Any, Throwable, String] =  // used only for integration testing
-    if isSession then 
-      JwtToken.jwtEncode(subject, keyBundle.sessionKey.value, expiredBySec * -1)
-    else
-      JwtToken.jwtEncode(subject, keyBundle.currentTokenKey.value, expiredBySec * -1)
+    val key = if isSession then keyBundle.sessionKey.value else keyBundle.currentTokenKey.value
+    JwtToken.jwtEncode(subject, key, expiredBySec * -1, List.empty[String])  // note: any roles are lost, but this is for testing only, so...
 
   /**
     * Update the current and previous keys with the latest keys from the secret key manager.
@@ -60,7 +59,7 @@ final case class LiveAuthentication(
     */
   def login(username: String, password: String): ZIO[Any, Either[GeneralFailure, BadCredentialError], TokenBundle] =
     for {
-      sessionToken <- JwtToken.jwtEncode(username+" (Session)", keyBundle.sessionKey.value, authConfig.sessionDurationSec)
+      sessionToken <- JwtToken.jwtEncode(username, keyBundle.sessionKey.value, authConfig.sessionDurationSec, List.empty[String])
         .mapError { throwable =>
           val errorMessage = s"Failed to generate session JWT for user $username: ${throwable.getMessage}"
           GeneralFailure(errorMessage)
@@ -68,7 +67,13 @@ final case class LiveAuthentication(
         .tapError(error => ZIO.logError(error.message))
         .mapError(Left(_)) // Wrap the error as a `Left` to match the return type
 
-      authToken <- JwtToken.jwtEncode(username, keyBundle.currentTokenKey.value, authConfig.tokenExpirationSec)
+      // Hardwired here--in real live pull thse out of a db, IAM, or something
+      roles = username match {
+        case "AdminUser" => List("admin") 
+        case "TestUser" => List("test") 
+        case _ => List.empty[String]
+      }
+      authToken <- JwtToken.jwtEncode(username, keyBundle.currentTokenKey.value, authConfig.tokenExpirationSec, roles)
         .mapError { throwable =>
           val errorMessage = s"Failed to generate auth JWT for user $username: ${throwable.getMessage}"
           GeneralFailure(errorMessage)
@@ -77,55 +82,74 @@ final case class LiveAuthentication(
         .mapError(Left(_)) // Wrap the error as a `Left` to match the return type
     } yield TokenBundle(sessionToken, authToken)
 
-  private[auth] def decodeToken(authToken: String, sessionToken: Option[String]): ZIO[Any, Response, (AuthToken, Session)] = {
+  // See if any of the user's roles (tokenRoles) exist in the endpointRoles list. If so, return the user's roles from the token.
+  private def checkPermissions(claim: JwtClaim, endpointRoles: List[String]): ZIO[Any, TokenError, List[String]] = {
     for {
-      now <- clock.instant
-      outcome <- JwtToken
-        .jwtDecode(authToken, keyBundle.currentTokenKey.value)
-        .map{ claim => 
-          (None, Session(claim.subject.get)) }
-        .catchSome {
-          case TokenError.Expired =>
-            // Complexity here:  
-            // If authToken is expired AND we have a session token AND the session token is not expired
-            // AND the authToken's expiration is within the refresh window, we'll allow a token refresh
-            sessionToken match {
-              case Some(sessToken) =>
-                JwtToken.jwtDecode(sessToken, keyBundle.sessionKey.value).flatMap { _ =>
-                  JwtToken.refreshToken(authToken, keyBundle.currentTokenKey.value, keyBundle.currentTokenKey.value, authConfig.refreshWindowSec, authConfig.tokenExpirationSec)
-                    .flatMap{ newToken => 
-                      JwtToken.jwtDecode(newToken, keyBundle.currentTokenKey.value)
-                      .map( claim => (Some(newToken), Session(claim.subject.get)) )
-                    }
-                }.orElse(ZIO.fail(TokenError.Expired)) // Fallback if session token decoding fails
-              case None =>
-                ZIO.fail(TokenError.Expired) // No session token, propagate the error
-            }
-
-          case TokenError.BadSignature => // might be hacking or a Secret Key rotation--try decoding with previoius key
-            keyBundle.previousTokenKey.map( prevKey =>
-              JwtToken.jwtDecode(authToken, prevKey.value)
-                .flatMap{ claim => 
-                  // Successful/validation decode with previous key, but we need to re-gen the token with the current key
-                  JwtToken.refreshToken(authToken, prevKey.value, keyBundle.currentTokenKey.value, authConfig.refreshWindowSec, authConfig.tokenExpirationSec)
-                    .map( newToken => (Some(newToken), Session(claim.subject.get)) )
-                }
-                .orElse{
-                  ZIO.logWarning("Attempt to decode token with unknown or expired secret key.") *>
-                  ZIO.fail(TokenError.BadSignature)
-                } // Fallback if previous key decode fails
-            ).getOrElse(ZIO.fail(TokenError.BadSignature)) // No previous key, propagate the error
-        }.mapError{_ =>  // Map errors to Response
-          Response.unauthorized("Invalid or expired token!")
-        }
-    } yield outcome
+      tokenRoles <- JwtToken.getRoles(claim)
+      isOk       =  endpointRoles.isEmpty || tokenRoles.exists(endpointRoles.contains)
+      _          <- ZIO.ifZIO(ZIO.succeed(isOk))(
+                      ZIO.unit, // Pass through if true
+                      ZIO.fail(TokenError.OtherProblem) // Fail if false
+                    )
+    } yield tokenRoles
   }
 
-  val requestInterceptH: Handler[Any, Response, Request, (AuthToken, (Request, Session))] =
+  private[auth] def decodeToken(authToken: String, sessionToken: Option[String], endpointRoles: List[String]): ZIO[Any, Response, (AuthToken, Session)] = 
+    (for {
+      now         <- clock.instant
+      claim       <- JwtToken.jwtDecode(authToken, keyBundle.currentTokenKey.value)
+      userRoles   <- checkPermissions(claim, endpointRoles)
+    } yield (None, Session(claim.subject.get, userRoles)))
+      .catchSome {
+        case TokenError.Expired =>
+          // Complexity here:  
+          // If authToken is expired AND we have a session token AND the session token is not expired
+          // AND the authToken's expiration is within the refresh window, we'll allow a token refresh
+          sessionToken match {
+            case Some(sessToken) =>
+              (for {
+                _                 <- JwtToken.jwtDecode(sessToken, keyBundle.sessionKey.value) // ensure session token is valid
+                (claim, newToken) <- JwtToken.refreshToken(
+                                        authToken, 
+                                        keyBundle.currentTokenKey.value, 
+                                        keyBundle.currentTokenKey.value, 
+                                        authConfig.refreshWindowSec, 
+                                        authConfig.tokenExpirationSec)
+                userRoles         <- checkPermissions(claim, endpointRoles)
+              } yield (Some(newToken), Session(claim.subject.get, userRoles)))
+                .mapError(_ => ZIO.fail(TokenError.Expired)) // Fallback if session token decoding fails or any other problem
+            case None =>
+              ZIO.fail(TokenError.Expired) // No session token, propagate the error
+          }
+
+        case TokenError.BadSignature => // might be hacking or a Secret Key rotation--try decoding with previoius key
+          keyBundle.previousTokenKey.map( prevKey =>
+            (for {
+              oldClaim          <- JwtToken.jwtDecode(authToken, prevKey.value)
+              // Successful/validation decode with previous key, but we need to re-gen the token with the current key
+              (claim, newToken) <- JwtToken.refreshToken(
+                                     authToken, 
+                                     prevKey.value,
+                                     keyBundle.currentTokenKey.value, 
+                                     authConfig.refreshWindowSec, 
+                                     authConfig.tokenExpirationSec)
+              userRoles         <- checkPermissions(claim, endpointRoles)
+                  //.map( newToken => (Some(newToken), Session(claim.subject.get)) )
+            } yield (Some(newToken), Session(claim.subject.get, userRoles)))
+            .mapError{ e => 
+              ZIO.logWarning("Attempt to decode token with unknown or expired secret key. "+e) *>
+              ZIO.fail(TokenError.BadSignature) 
+            } // Fallback if previous key decode fails or any other problem
+          ).getOrElse(ZIO.fail(TokenError.BadSignature)) // No previous key, propagate the error
+      }.mapError{_ =>  // Map errors to Response
+        Response.unauthorized("Invalid or expired token, or lacking role permissions")
+      }
+
+  def requestInterceptH(endpointRoles: List[String]): Handler[Any, Response, Request, (AuthToken, (Request, Session))] =
     Handler.fromFunctionZIO[Request] { request =>
       request.header(Header.Authorization) match {
         case Some(Header.Authorization.Bearer(token)) =>
-          decodeToken(token.value.asString, request.headers.get("X-Session-Token")).flatMap { decoded =>
+          decodeToken(token.value.asString, request.headers.get("X-Session-Token"), endpointRoles).flatMap { decoded =>
             val (authToken, session) = decoded
             ZIO.succeed((authToken, (request, session)))
           }
@@ -153,8 +177,8 @@ final case class LiveAuthentication(
       )
     }
 
-  def bearerAuthWithContext: HandlerAspect[Any, Session] = 
-    HandlerAspect.interceptHandlerStateful[Any, AuthToken, Session](requestInterceptH)(responseInterceptH)
+  def bearerAuthWithContext(roles: List[String]): HandlerAspect[Any, Session] = 
+    HandlerAspect.interceptHandlerStateful[Any, AuthToken, Session](requestInterceptH(roles))(responseInterceptH)
 
 
 object Authentication:

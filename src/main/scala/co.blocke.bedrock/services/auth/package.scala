@@ -9,6 +9,9 @@ import zio.json.*
 import zio.schema.DeriveSchema
 import zio.schema.Schema
 
+//-------------------
+// Auth Errors
+
 case class BadCredentialError(message: String)
 case class GeneralFailure(message: String)
 
@@ -17,10 +20,11 @@ object BadCredentialError:
 object GeneralFailure:
   implicit val schema: Schema[GeneralFailure] = DeriveSchema.gen
 
+
+//-------------------
+// Tokens (JWT Tokens)
+
 type AuthToken = Option[String]
-
-case class Session(userId: String)  // This is the payload of the JWT token and can contain other things like roles, etc.
-
 case class TokenHeader(sub: String, iat: Long)
 object TokenHeader:
   implicit val codec: JsonCodec[TokenHeader] = DeriveJsonCodec.gen[TokenHeader]
@@ -30,7 +34,14 @@ object TokenBundle:
   implicit val schema: Schema[TokenBundle] = DeriveSchema.gen[TokenBundle]
   implicit val codec: JsonCodec[TokenBundle] = DeriveJsonCodec.gen[TokenBundle]
 
-// Convert between ZIO Clock (for testability) to Java Clock (for JWT library)
+//-------------------
+// Session (placeholder--real session would be reified from JWT token subject, eg id, from a db or cache
+
+case class Session(userId: String, roles: List[String])  // This is the payload of the JWT token and can contain other things like roles, etc.
+
+// For testability, everything runs on ZIO Clock, so it can be manipulated in tests
+// by TestClock.  However, the JWT library uses Java Clock.  This is a conversion utility
+// to convert ZIO Clock to Java Clock for the JWT library.
 object ClockConverter {
   def dynamicJavaClock(clock: zio.Clock): java.time.Clock = new java.time.Clock {
     override def getZone: ZoneId = ZoneId.systemDefault()

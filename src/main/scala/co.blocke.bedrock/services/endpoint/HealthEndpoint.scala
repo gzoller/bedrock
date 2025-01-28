@@ -36,11 +36,8 @@ final case class LiveHealthEndpoint(auth: Authentication, awsSnsEndpoint: AwsSns
   val health_routes: Routes[Any, Nothing] = Routes(health_endpoint.implementHandler(health_handler))
 
   //-------------------------------------------------------------------------------
-  // The following endpoints are only used for unit testing. They are NOT built into production code!
+  // The following endpoints are only used for unit testing. If not running locally, they are not provided to the server.
   //-------------------------------------------------------------------------------
-
-// TODO: Rather than trying to set the time, make an endpoint that receives a token and re-encodes it to be expired per
-// a given parameter.  This way we can fake manipulate time.  The endpoint would return the modified (now expired) token.
 
   val expire_token_endpoint: Endpoint[Unit, (Long,Boolean), Unit, String, zio.http.endpoint.AuthType.None] = Endpoint(RoutePattern.POST / "expire_token")
     .query(HttpCodec.query[Long]("seconds"))
@@ -58,7 +55,7 @@ final case class LiveHealthEndpoint(auth: Authentication, awsSnsEndpoint: AwsSns
       }
     }
 
-  val expire_token_routes: Routes[Any, Nothing] = Routes(expire_token_endpoint.implementHandler(expire_token_handler)) @@ auth.bearerAuthWithContext
+  val expire_token_routes: Routes[Any, Nothing] = Routes(expire_token_endpoint.implementHandler(expire_token_handler)) @@ auth.bearerAuthWithContext(List("test"))
 
   val key_bundle_endpoint: Endpoint[Unit, Unit, Unit, Int, endpoint.AuthType.None] = Endpoint(RoutePattern.GET / "key_bundle_version")
     .out[Int](MediaType.text.plain)
@@ -67,8 +64,7 @@ final case class LiveHealthEndpoint(auth: Authentication, awsSnsEndpoint: AwsSns
   val key_bundle_handler: Handler[Session, Unit, Unit, Int] = 
     Handler.fromZIO( auth.getKeyBundleVersion )
 
-  val key_bundle_routes: Routes[Any, Nothing] = Routes(key_bundle_endpoint.implementHandler(key_bundle_handler)) @@ auth.bearerAuthWithContext
-
+  val key_bundle_routes: Routes[Any, Nothing] = Routes(key_bundle_endpoint.implementHandler(key_bundle_handler)) @@ auth.bearerAuthWithContext(List("test"))
 
 
   val routes = 

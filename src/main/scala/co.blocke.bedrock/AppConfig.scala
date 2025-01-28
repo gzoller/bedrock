@@ -12,7 +12,8 @@ case class AuthConfig(
     refreshWindowSec: Int,
     sessionDurationSec: Int,
     tokenSecretName: String,
-    sessionSecretName: String
+    sessionSecretName: String,
+    roleFieldName: Option[String]
 )
 
 case class AWSConfig(

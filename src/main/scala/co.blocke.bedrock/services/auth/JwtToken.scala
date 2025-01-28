@@ -5,12 +5,30 @@ package auth
 import pdi.jwt.*
 import zio.*
 import zio.json.*
+import zio.json.ast.Json
 
 
-case class JwtPayload(sub: Option[String])
+case class JwtPayload(
+  sub: Option[String],
+  
+  // OAuth providers often include roles in the JWT payload. However... the name and format is not
+  // standard. So we'll support a few of the better knwon ones here and you can add/change as needed.
+  // The default Bedrock Auth system uses "roles" as the field name.
+
+  // To handle this flexibility we're using dyamic fields
+  dynamicFields: Map[String, Json] = Map.empty // Store other fields dynamically
+  )
+
 object JwtPayload {
-  implicit val decoder: JsonDecoder[JwtPayload] = DeriveJsonDecoder.gen[JwtPayload]
-  implicit val encoder: JsonEncoder[JwtPayload] = DeriveJsonEncoder.gen[JwtPayload]
+  implicit val decoder: JsonDecoder[JwtPayload] = JsonDecoder[Map[String, Json]].mapOrFail { fields =>
+    val sub = fields.get("sub").flatMap(_.as[String].toOption)
+    Right(JwtPayload(sub, fields - "sub")) // Remove `sub` from dynamicFields
+  }
+
+  implicit val encoder: JsonEncoder[JwtPayload] = JsonEncoder[Map[String, Json]].contramap { payload =>
+    // Combine `sub` and `dynamicFields` into a single map
+    payload.dynamicFields ++ payload.sub.map("sub" -> Json.Str(_))
+  }
 }
 
 object JwtToken:
@@ -48,7 +66,7 @@ object JwtToken:
       )
     }
 
-  private[auth] def jwtEncode(subject: String, key: String, expireSec: Long)(implicit clock: zio.Clock): ZIO[Any, Throwable, String] =
+  private[auth] def jwtEncode(subject: String, key: String, expireSec: Long, roles: List[String])(implicit clock: zio.Clock): ZIO[Any, Throwable, String] =
     for {
       now <- clock.instant.map(_.getEpochSecond) // Dynamically fetch the current time
       claim = JwtClaim(subject = Some(subject))
@@ -56,7 +74,20 @@ object JwtToken:
         .expiresIn(expireSec)(
           using ClockConverter.dynamicJavaClock(clock) // Use dynamic Clock here
         )
+        .withContent("""{"roles":[""" + roles.map(r => "\"" + r + "\"").mkString(",") + "]}" )
       token <- ZIO.attempt(Jwt.encode(claim, key, JwtAlgorithm.HS512))
+    } yield token 
+
+  // Another version of jwtEncode using Claim, for use when refreshing a token. This one maintains original claim's payload fields, roles, etc.
+  private[auth] def jwtEncode(claim: JwtClaim, key: String, expireSec: Long)(implicit clock: zio.Clock): ZIO[Any, Throwable, String] =
+    for {
+      now <- clock.instant.map(_.getEpochSecond) // Dynamically fetch the current time
+      newClaim = claim
+        .issuedAt(now)
+        .expiresIn(expireSec)(
+          using ClockConverter.dynamicJavaClock(clock) // Use dynamic Clock here
+        )
+      token <- ZIO.attempt(Jwt.encode(newClaim, key, JwtAlgorithm.HS512))
     } yield token 
 
   private[auth] def jwtDecode(
@@ -79,20 +110,47 @@ object JwtToken:
   private[auth] def refreshToken(
     token: String,
     decodeWith: String,
-    encodeNewWith: String,
+    encodeNewKey: String,
     leewaySec: Long,
     expirationSec: Long
-  )(implicit clock: zio.Clock): ZIO[Any, TokenError, String] = 
+  )(implicit clock: zio.Clock): ZIO[Any, TokenError, (JwtClaim, String)] = 
     for {
       now <- clock.instant
       // Decode the token allowing for extra time (refresh_window_sec from config) to see if it is still in the
       // refresh window
-      sloppy <- jwtDecode(token, decodeWith, leewaySec)
-      newToken <- sloppy.subject match {
+      sloppyClaim <- jwtDecode(token, decodeWith, leewaySec)
+      newToken <- sloppyClaim.subject match {
         case None => ZIO.fail(TokenError.NoSubject)
-        case Some(subject) => 
+        case _ => 
           // Re-encode the token with a new expiration time
-          jwtEncode(subject, encodeNewWith, expirationSec)
+          jwtEncode(sloppyClaim, encodeNewKey, expirationSec)
             .mapError(_ => TokenError.OtherProblem)
       }
-    } yield newToken
+    } yield (sloppyClaim, newToken)
+
+  private[auth] def getRoles(claim: JwtClaim, roleFieldName: Option[String] = None): ZIO[Any, TokenError, List[String]] = {
+    // Define the possible keys that can represent "roles"
+    val roleKeys = Set(
+      "roles",           // Bedrock default, Okta
+      "scope"            // OAuth 2.0/OpenID Connect (OIDC)
+      ) ++ roleFieldName.toSet  // custom, sometimes a url
+
+    for {
+      payload <- ZIO
+        .fromEither(claim.content.fromJson[JwtPayload])
+        .mapError(_ => TokenError.BadPayload)
+      roles <- ZIO.succeed {
+        // Find the first matching key and parse it as either List[String] or String
+        roleKeys
+          .flatMap { key =>
+            payload.dynamicFields.get(key).toList.flatMap { jsonValue =>
+              jsonValue.as[List[String]].toOption.orElse(
+                jsonValue.as[String].toOption.map(_.split(' ').toList) // space-sep list of roles
+              )
+            }
+          }
+          .headOption
+          .getOrElse(List.empty[String]) // Default to empty list if no match is found
+      }
+    } yield roles
+  }
