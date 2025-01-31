@@ -41,6 +41,7 @@ lazy val root = (project in file("."))
       "software.amazon.awssdk" % "sns" % "2.20.0",  // Secrets Manager SDK
 
       // ---- Misc
+      "com.fasterxml.uuid" % "java-uuid-generator" % "5.1.0",  // Generate UUIDv7 (time-sensitive UUIDs)
       "org.scala-lang.modules" %% "scala-xml" % "2.3.0",
       "ch.qos.logback" % "logback-classic" % "1.4.6",
       "com.github.jwt-scala" %% "jwt-core" % "10.0.1",

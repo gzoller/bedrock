@@ -8,12 +8,25 @@ import zio.http.URL
 
 
 case class AuthConfig(
+    tenantPrefix: String,          // prepended to state, cache keys for multi-tenancy (each tenant gets their own prefix)
+    callbackBaseUrl: String,
+    oauthConfig: OAuthConfig,
+
     tokenExpirationSec: Int,
     refreshWindowSec: Int,
     sessionDurationSec: Int,
     tokenSecretName: String,
     sessionSecretName: String,
     roleFieldName: Option[String]
+)
+
+case class OAuthConfig(
+    provider: String,
+    scopes: List[String],
+    authUrl: URL,
+    redirectUrl: URL,
+    tokenUrl: URL,
+    providerCertsUrl: String
 )
 
 case class AWSConfig(

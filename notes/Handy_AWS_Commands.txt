@@ -21,3 +21,12 @@ aws secretsmanager describe-secret \
     --secret-id MySecretKey \
     --endpoint-url=http://localhost:4566 \
     --region us-east-1
+
+// Check redis status
+aws elasticache describe-cache-clusters \
+    --cache-cluster-id session-redis-cluster \
+    --show-cache-node-info
+
+// For cluster
+aws elasticache describe-replication-groups \
+    --replication-group-id my-redis-replication-group

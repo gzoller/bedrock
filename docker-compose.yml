@@ -9,22 +9,20 @@ services:
     image: localstack/localstack
     ports:
       - "4566:4566"            # LocalStack Gateway
+      - "8085:8085"            # LocalStack custom health check
+    entrypoint: sh -c "apt-get update && apt-get install -y jq && exec /usr/local/bin/docker-entrypoint.sh localstack"
     volumes:
-#      - "${LOCALSTACK_VOLUME_DIR:-./volume}:/var/lib/localstack"
       - "/var/run/docker.sock:/var/run/docker.sock"
+      - "./scripts/shutdown.sh:/etc/localstack/init/shutdown.d/shutdown.sh"
       - "./scripts/configure_localstack.sh:/etc/localstack/init/ready.d/script.sh"
       - "./scripts/rotationLambda.zip:/scripts/rotationLambda.zip"
       - "./certs/server.crt:/usr/local/share/ca-certificates/server.crt" # Mount the certificate
       - "./certs/server.key:/usr/local/share/ca-certificates/server.key"
-    command: >
-      sh -c "cp /usr/local/share/ca-certificates/server.crt /etc/ssl/certs/ && 
-        cp /usr/local/share/ca-certificates/server.key /etc/ssl/private/ &&
-        update-ca-certificates &&
-        exec localstack"
     healthcheck:
-      test: ["CMD", "curl", "-f", "http://localhost:4566/_localstack/health"]
+      test: >
+        curl --silent --fail http://localhost:8085
       interval: 5s
-      timeout: 2s
+      timeout: 3s
       retries: 5
     networks:
       great-network:
@@ -44,6 +42,8 @@ services:
     volumes:
       - "./certs/server.crt:/certs/server.crt" # Mount the certificate
       - "./certs/server.key:/certs/server.key"
+    env_file:
+      - "./certs/oauth.env"
     environment:
       - JAVA_OPTS=-Djava.net.preferIPv4Stack=true
       - LOCALSTACK_URL=http://localstack:4566

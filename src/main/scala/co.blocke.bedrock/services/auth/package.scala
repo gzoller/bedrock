@@ -10,6 +10,14 @@ import zio.schema.DeriveSchema
 import zio.schema.Schema
 
 //-------------------
+// Types
+
+opaque type AccessToken = String
+opaque type RefreshToken = String
+opaque type IDToken = String
+
+
+//-------------------
 // Auth Errors
 
 case class BadCredentialError(message: String)

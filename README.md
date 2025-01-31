@@ -1,4 +1,5 @@
 # bedrock
+![Bedrock](docs/Bedrock_Logo.png)
 Starting point for REST service
 
 ## Features
@@ -17,14 +18,22 @@ Starting point for REST service
   - Session (refresh) tokens
   - Role-based endpoint protection
 
+
+
 IN-PROGRESS:
+* Move AWS scripts to terraform
 * Figure out OAuth
+   -- Get web-based OAuth working
+   -- Get Mobile/SPA/machine-2-machine working (different flow? AJAX?)
 * Figure out config w/env vars that override, eg IS_LIVE to know if we're running live or locally
+
 
 DEPLOYMENT/AWS:
 * Configure logback to send logs to CloudWatch. May need templated config files to do this.
 
+
 TODO:
+* Implement true session cache with Elasticache+Redis (requires upgrade to Localstack Pro)
 * Auto-generate Swagger config (fixed with my own mods to ZIO HTTP...PR pending)
 * Hide server.crt/server.key files but ensure they're published & packaged correctly
 * Figure out packaging (Docker, versioning, deployment, local/AWS)

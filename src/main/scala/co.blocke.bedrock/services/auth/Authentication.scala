@@ -12,8 +12,8 @@ import aws.{AwsSecretsManager, KeyBundle}
 
 trait Authentication:
   def login(username: String, password: String): ZIO[Any, Either[GeneralFailure, BadCredentialError], TokenBundle] // returns a token
-  def updateKeys: ZIO[Any, Throwable, Unit]
   def bearerAuthWithContext(roles: List[String] = List.empty[String]): HandlerAspect[Any, Session]
+  def updateKeys: ZIO[Any, Throwable, Unit]
   def issueExpiredToken(expiredBySec: Long, subject: String, isSession: Boolean): ZIO[Any, Throwable, String]  // used only for integration testing
   def getKeyBundleVersion: UIO[Int]
 

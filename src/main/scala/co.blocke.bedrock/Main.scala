@@ -7,7 +7,7 @@ import zio.http.netty.client.NettyClientDriver
 
 import services.*
 import aws.{AwsSnsEndpoint, AwsSecretsManager, AwsEnvironment}
-import auth.Authentication
+import auth.{OAuth2, Authentication}
 import db.BookRepo
 import services.endpoint.{BookEndpoint, HealthEndpoint}
 
@@ -38,9 +38,11 @@ object Main extends ZIOAppDefault {
       healthEndpoint   <- ZIO.service[HealthEndpoint]
       _                <- ZIO.logInfo("Loading AwsEventEndpoint service")
       awsSnsEndpoint   <- ZIO.service[AwsSnsEndpoint]
+      // oauthEndpoint    <- ZIO.service[OAuth2]
 
       // Start the server first
       _                <- ZIO.logInfo("Setting routes")
+      // routes           =  oauthEndpoint.routes ++ bookEndpoint.routes ++ awsSnsEndpoint.routes ++ healthEndpoint.routes
       routes           =  bookEndpoint.routes ++ awsSnsEndpoint.routes ++ healthEndpoint.routes
       shutdownPromise  <- Promise.make[Nothing, Unit] // Promises for graceful shutdown
       _                <- ZIO.logInfo("Starting server...")
@@ -69,7 +71,10 @@ object Main extends ZIOAppDefault {
 
       // make here magically sews together all the dependencies for the program.
       // MUCH easier than doing it manually!
+      //
+      // NOTE: The type params in the make[] list must be those used accessed in ZIO.service in program, above!
       val appLayer = ZLayer.make[BookEndpoint & AwsSnsEndpoint & HealthEndpoint & Client](
+      // val appLayer = ZLayer.make[BookEndpoint & AwsSnsEndpoint & HealthEndpoint & OAuth2 & Client](
         clientLayer,
         sharedAppConfig,
         Authentication.live,
@@ -78,8 +83,9 @@ object Main extends ZIOAppDefault {
         BookRepo.mock,
         BookEndpoint.live,
         AwsSnsEndpoint.live,
-        HealthEndpoint.live
-      )
+        HealthEndpoint.live,
+        // OAuth2.live
+      )      
 
       program.provideSomeLayer[Scope](appLayer ++ serverLayer ++ clientLayer)
 
