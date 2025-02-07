@@ -1,0 +1,109 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <link rel="shortcut icon" href="/favicon.ico" type="image/x-icon">
+    <link rel="icon" href="/favicon.ico" type="image/x-icon">
+    <title>Login with Google</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background-color: #f4f4f4;
+        }
+        .container {
+            text-align: center;
+            background: white;
+            padding: 20px;
+            border-radius: 8px;
+            box-shadow: 0px 0px 10px rgba(0,0,0,0.1);
+        }
+        button {
+            background-color: #4285F4;
+            color: white;
+            border: none;
+            padding: 10px 20px;
+            font-size: 16px;
+            cursor: pointer;
+            border-radius: 5px;
+        }
+        button:hover {
+            background-color: #357ae8;
+        }
+    </style>
+</head>
+<body>
+
+<div class="container">
+    <h2>Welcome to My App</h2>
+    <p>Click below to log in with Google:</p>
+    <button id="login-button" onclick="redirectToGoogle()">Login with Google</button>
+</div>
+
+<script>
+    // ✅ Function to get a cookie value
+    function getCookie(name) {
+        const match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
+        return match ? match[2] : null;
+    }
+
+    // ✅ Function to delete a cookie
+    function deleteCookie(name) {
+        document.cookie = `${name}=; Path=/; Expires=Thu, 01 Jan 1970 00:00:00 UTC; Secure; SameSite=Strict`;
+    }
+
+    // ✅ Function to generate a random state string (for security)
+    function generateRandomString(length) {
+        const array = new Uint8Array(length);
+        window.crypto.getRandomValues(array);
+        return Array.from(array, byte => String.fromCharCode(65 + (byte % 26))).join('');
+    }
+
+    // ✅ Function to redirect to login_proxy (normal login)
+    function redirectToGoogle() {
+        const basePath = window.location.href.substring(0, window.location.href.lastIndexOf("/") + 1);
+        const redirectLocation = encodeURIComponent(basePath + "home.html");
+        const state = generateRandomString(16); // 16-character random string
+
+        const url = `https://localhost:8073/api/login_proxy?redirect_location=${redirectLocation}&state=${state}`;
+        window.location.href = url;
+    }
+
+    // ✅ Function to attempt login with existing sessionId
+    function trySessionLogin(sessionId) {
+        const url = `https://localhost:8073/api/login_proxy?sessionId=${sessionId}`;
+        window.location.href = url;
+    }
+
+    // ✅ Handle login errors (e.g., session expired)
+    function checkForErrors() {
+        const params = new URLSearchParams(window.location.search);
+        const error = params.get("error");
+
+        if (error === "session_expired" || error === "session_invalid") {
+            console.warn("Session expired or invalid, clearing sessionId cookie...");
+            deleteCookie("sessionId");
+            window.location.href = "/landing.html"; // Reload the page to reset login
+        }
+    }
+
+    // ✅ Main Execution: Check for sessionId and handle login flow
+    window.onload = function () {
+        const sessionId = getCookie("sessionId");
+
+        if (sessionId) {
+            console.log("Session detected, redirecting to home...");
+            window.location.href = "home.html"; // Redirect to home if session exists
+        } else {
+            console.log("No session detected, checking for errors...");
+            checkForErrors(); // Check if we need to clear session due to an error
+        }
+    };
+</script>
+
+</body>
+</html>

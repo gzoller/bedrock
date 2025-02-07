@@ -14,10 +14,11 @@ case class AuthConfig(
 
     tokenExpirationSec: Int,
     refreshWindowSec: Int,
-    sessionDurationSec: Int,
     tokenSecretName: String,
     sessionSecretName: String,
-    roleFieldName: Option[String]
+    roleFieldName: Option[String],
+    sessionInactivitySec: Int,
+    sessionLifespanSec: Int
 )
 
 case class OAuthConfig(

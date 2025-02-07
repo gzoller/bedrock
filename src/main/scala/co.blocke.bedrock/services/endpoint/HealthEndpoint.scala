@@ -9,7 +9,8 @@ import zio.http.codec.PathCodec.*
 import zio.http.endpoint.Endpoint
 import zio.schema.*
 
-import auth.{Authentication, Session}
+import auth.Authentication
+import auth.model.*
 import aws.{AwsEnvironment,AwsSnsEndpoint}
 
 
@@ -18,11 +19,11 @@ trait HealthEndpoint:
 
 final case class LiveHealthEndpoint(auth: Authentication, awsSnsEndpoint: AwsSnsEndpoint, isRunningLocally: Boolean) extends HealthEndpoint:
 
-  val health_endpoint: Endpoint[Unit, Unit, Unit, String, endpoint.AuthType.None] = Endpoint(RoutePattern.GET / "health")
+  private val health_endpoint: Endpoint[Unit, Unit, Unit, String, endpoint.AuthType.None] = Endpoint(RoutePattern.GET / "health")
     .out[String](MediaType.text.plain)
     .outError[Unit](Status.NotImplemented)
 
-  val health_handler: Handler[Any, Unit, Unit, String] = 
+  private val health_handler: Handler[Any, Unit, Unit, String] =
     Handler.fromZIO { 
       for {
         isSubscribedToSns <- awsSnsEndpoint.isSubscribedToSNS
@@ -33,41 +34,41 @@ final case class LiveHealthEndpoint(auth: Authentication, awsSnsEndpoint: AwsSns
       } yield result
     }
 
-  val health_routes: Routes[Any, Nothing] = Routes(health_endpoint.implementHandler(health_handler))
+  private val health_routes: Routes[Any, Nothing] = Routes(health_endpoint.implementHandler(health_handler))
 
   //-------------------------------------------------------------------------------
   // The following endpoints are only used for unit testing. If not running locally, they are not provided to the server.
   //-------------------------------------------------------------------------------
 
-  val expire_token_endpoint: Endpoint[Unit, (Long,Boolean), Unit, String, zio.http.endpoint.AuthType.None] = Endpoint(RoutePattern.POST / "expire_token")
+  private val expire_token_endpoint: Endpoint[Unit, (Long,Boolean), Unit, String, zio.http.endpoint.AuthType.None] = Endpoint(RoutePattern.POST / "expire_token")
     .query(HttpCodec.query[Long]("seconds"))
     .query(HttpCodec.query[Boolean]("isSession"))
     .out[String](MediaType.text.plain)
     .outError[Unit](Status.InternalServerError)
 
-  val expire_token_handler: Handler[Session, Unit, (Long,Boolean), String] = 
+  private val expire_token_handler: Handler[Session, Unit, (Long,Boolean), String] =
     Handler.fromFunctionZIO { case (expired_by_sec: Long, isSession: Boolean) =>
       ZIO.environmentWithZIO[Session] { env =>
         val session = env.get[Session] // Extract the Session from ZEnvironment
-        auth.issueExpiredToken(expired_by_sec, session.userId, isSession)
+        auth.issueExpiredToken(expired_by_sec, session.profile.userId, isSession)
           .mapError(_ => ()) // Convert Throwable to Unit to match the handler's error type
           .provideEnvironment(env) // Re-provide the Session context
       }
     }
 
-  val expire_token_routes: Routes[Any, Nothing] = Routes(expire_token_endpoint.implementHandler(expire_token_handler)) @@ auth.bearerAuthWithContext(List("test"))
+  private val expire_token_routes: Routes[Any, Nothing] = Routes(expire_token_endpoint.implementHandler(expire_token_handler)) @@ auth.bedrockProtected(List("test"))
 
-  val key_bundle_endpoint: Endpoint[Unit, Unit, Unit, Int, endpoint.AuthType.None] = Endpoint(RoutePattern.GET / "key_bundle_version")
+  private val key_bundle_endpoint: Endpoint[Unit, Unit, Unit, Int, endpoint.AuthType.None] = Endpoint(RoutePattern.GET / "key_bundle_version")
     .out[Int](MediaType.text.plain)
     .outError[Unit](Status.InternalServerError)
 
-  val key_bundle_handler: Handler[Session, Unit, Unit, Int] = 
+  private val key_bundle_handler: Handler[Session, Unit, Unit, Int] =
     Handler.fromZIO( auth.getKeyBundleVersion )
 
-  val key_bundle_routes: Routes[Any, Nothing] = Routes(key_bundle_endpoint.implementHandler(key_bundle_handler)) @@ auth.bearerAuthWithContext(List("test"))
+  private val key_bundle_routes: Routes[Any, Nothing] = Routes(key_bundle_endpoint.implementHandler(key_bundle_handler)) @@ auth.bedrockProtected(List("test"))
 
 
-  val routes = 
+  val routes: Routes[Any, Response] =
     if isRunningLocally then
       health_routes ++ expire_token_routes ++ key_bundle_routes
     else

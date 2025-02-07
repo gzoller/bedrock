@@ -15,11 +15,12 @@ import zio.http.endpoint.openapi.OpenAPI.Components
 import zio.http.endpoint.openapi.OpenAPI.Key
 import zio.http.endpoint.openapi.OpenAPI.ReferenceOr
 import zio.http.endpoint.openapi.OpenAPI.SecurityScheme.*
+import zio.http.endpoint.AuthType.Bearer
 import zio.schema.*
 
 import auth.*
+import auth.model.*
 import db.BookRepo
-import zio.http.endpoint.AuthType.Bearer
 
 trait BookEndpoint:
   def routes: Routes[Any, Response]
@@ -27,8 +28,8 @@ trait BookEndpoint:
 
 final case class LiveBookEndpoint( auth: Authentication, bookRepo: BookRepo ) extends BookEndpoint:
 
-  val authHeaderDoc: Doc = Doc.p("Requires an `Authorization: Bearer <token>` header to access this endpoint.")
-  val bearerAuthScheme: Http = OpenAPI.SecurityScheme.Http(
+  private val authHeaderDoc: Doc = Doc.p("Requires an `Authorization: Bearer <token>` header to access this endpoint.")
+  private val bearerAuthScheme: Http = OpenAPI.SecurityScheme.Http(
     scheme = "bearer",
     bearerFormat = Some("JWT"), // Optional: specify the token format
     description = Some(Doc.p("Use a Bearer token for authentication."))
@@ -36,7 +37,7 @@ final case class LiveBookEndpoint( auth: Authentication, bookRepo: BookRepo ) ex
 
   // --------- Search for books 
   //===============================================================
-  val book_endpoint: Endpoint[Unit, (String, Int), ZNothing, List[Book], Bearer.type] = Endpoint((RoutePattern.GET / "books") ?? (Doc.p("Route for querying books" + authHeaderDoc)))
+  private val book_endpoint: Endpoint[Unit, (String, Int), ZNothing, List[Book], Bearer.type] = Endpoint((RoutePattern.GET / "api" / "books") ?? (Doc.p("Route for querying books" + authHeaderDoc)))
     .query(HttpCodec.query[String]("q").examples (("example1", "scala"), ("example2", "zio")) ?? Doc.p(
           "Query parameter for searching books"
         ))
@@ -52,28 +53,36 @@ final case class LiveBookEndpoint( auth: Authentication, bookRepo: BookRepo ) ex
 
   // The String here in the Handler R type is the user id, pulled from the decrypted token, ie. the "subject".
   // In a production server this could be a more complex session object, or a session id, etc.
-  val book_handler: Handler[Session, Nothing, (String,Int), List[Book]] = handler { (query: String, num: Int) =>
+  private val book_handler: Handler[Session, Nothing, (String,Int), List[Book]] = handler { (query: String, num: Int) =>
     withContext((session: Session) => bookRepo.find(query) )
   }
-  val bookSearchRoute: Routes[Any, Nothing] = Routes(book_endpoint.implementHandler(book_handler)) @@ auth.bearerAuthWithContext()
+  private val bookSearchRoute: Routes[Any, Nothing] = Routes(book_endpoint.implementHandler(book_handler)) @@ auth.bedrockProtected()
 
 
   // --------- Hello message
   //===============================================================
-  val hello_endpoint: Endpoint[Unit, Unit, ZNothing, String, Bearer.type] = Endpoint(RoutePattern.GET / "hello" ?? (Doc.p("Say hello to the people") + authHeaderDoc))
-    .out[String](MediaType.text.plain, Doc.p("Just a hello message")) // force plaintext response, not JSON
-    .auth[AuthType.Bearer](AuthType.Bearer)
+  private val hello_endpoint: Endpoint[Unit, Unit, ZNothing, String, Bearer.type] =
+    Endpoint(RoutePattern.GET / "api" / "hello" ??
+      (Doc.p("Say hello to the people") + authHeaderDoc))
+      .out[String](MediaType.text.plain, Doc.p("Just a hello message")) // force plaintext response, not JSON
+      .auth[AuthType.Bearer](AuthType.Bearer)
 
-  val hello_handler: Handler[Session, Nothing, Unit, String] = handler { (_: Unit) =>
-    ZIO.service[Session].map{ session =>
-      s"Hello, World, ${session.userId}!"
+  private val hello_handler: Handler[Session, Nothing, Unit, String] = handler { (_: Unit) =>
+    ZIO.serviceWithZIO[Session] { session =>
+      if (session.profile.given_name.nonEmpty)
+        ZIO.succeed(s"""Hello, World, ${session.profile.given_name.getOrElse("Unknown")}!""")
+      else
+        ZIO.succeed("No session, you pirate!")
     }
   }
-  val helloRoute: Routes[Any, Nothing] = Routes(hello_endpoint.implementHandler(hello_handler)) @@ auth.bearerAuthWithContext()
+
+  private val helloRoute: Routes[Any, Nothing] = Routes(hello_endpoint.implementHandler(hello_handler))
+    @@ auth.bedrockProtected()
 
 
   // --------- Login message
   //===============================================================
+  /*
   val login_endpoint: Endpoint[Unit, Option[String], Either[GeneralFailure, BadCredentialError], TokenBundle, zio.http.endpoint.AuthType.None.type] = 
     Endpoint((RoutePattern.GET / "login") ?? Doc.p("Mock of a user login form to obtain auth token"))
       .query(HttpCodec.query[Option[String]]("userid").examples (("example1", Some("mbarnes@foo.com"))) ?? Doc.p(
@@ -93,6 +102,7 @@ final case class LiveBookEndpoint( auth: Authentication, bookRepo: BookRepo ) ex
     }
 
   val loginRoute: Routes[Any, Nothing] = Routes(login_endpoint.implementHandler(login_handler))
+  */
 
   
   // --------- Swagger, if non-prod
@@ -101,7 +111,7 @@ final case class LiveBookEndpoint( auth: Authentication, bookRepo: BookRepo ) ex
     if co.blocke.bedrock.MyBuildInfo.isProd then
       Routes.empty // disable Swagger for prod deployment
     else
-      val openAPIFirst = OpenAPIGen.fromEndpoints(title = "Library API", version = "1.0", book_endpoint, hello_endpoint, login_endpoint)
+      val openAPIFirst = OpenAPIGen.fromEndpoints(title = "Library API", version = "1.0", book_endpoint, hello_endpoint) //, login_endpoint)
       val openAPI = openAPIFirst
           .copy(
             components = Some(Components(
@@ -114,7 +124,8 @@ final case class LiveBookEndpoint( auth: Authentication, bookRepo: BookRepo ) ex
   // --------- Bundle up all routes
   def routes: Routes[Any, Response] = {
     // Provide a default SessionContext for unsecured routes
-    val unsecuredRoutes = loginRoute ++ swaggerRoutes
+    val unsecuredRoutes = swaggerRoutes
+//    val unsecuredRoutes = loginRoute ++ swaggerRoutes
 
     // Secured routes with bearerAuthWithContext
     val securedRoutes = bookSearchRoute ++ helloRoute 

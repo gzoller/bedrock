@@ -62,6 +62,8 @@ lazy val root = (project in file("."))
       "-deprecation" // Enable warnings for deprecated APIs
     ),
 
+    javacOptions ++= Seq("-source", "21", "-target", "21"),
+
     // Docker packaging settings
     dockerExposedPorts += 8073,
     dockerBaseImage := "openjdk:21",

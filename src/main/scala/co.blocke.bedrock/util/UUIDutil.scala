@@ -1,13 +1,12 @@
 package co.blocke.bedrock
-package services
-package auth
+package util
 
 import com.fasterxml.uuid.Generators
 import java.util.Base64
 import java.nio.ByteBuffer
 
 
-object UUIDUtil:
+object UUIDutil:
 
   /**
    * Generate a base64-encoded random UUIDv7 string

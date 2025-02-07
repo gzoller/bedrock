@@ -3,6 +3,9 @@ package services
 package auth
 
 import java.time.*
+import java.net.URLEncoder
+import java.util.Base64
+import java.nio.charset.StandardCharsets
 
 import zio.*
 import zio.json.*
@@ -19,9 +22,10 @@ opaque type IDToken = String
 
 //-------------------
 // Auth Errors
-
-case class BadCredentialError(message: String)
-case class GeneralFailure(message: String)
+trait AuthError
+final case class SessionExpired(message: String) extends AuthError
+final case class BadCredentialError(message: String) extends AuthError
+final case class GeneralFailure(message: String) extends AuthError
 
 object BadCredentialError:
   implicit val schema: Schema[BadCredentialError] = DeriveSchema.gen
@@ -43,9 +47,16 @@ object TokenBundle:
   implicit val codec: JsonCodec[TokenBundle] = DeriveJsonCodec.gen[TokenBundle]
 
 //-------------------
-// Session (placeholder--real session would be reified from JWT token subject, eg id, from a db or cache
+// Provider OAuth Tokens
+case class ProviderOAuthTokens(
+  access_token: String,
+  expires_in: Long,
+  id_token: String,
+  refresh_token: Option[String] = None
+)
+object ProviderOAuthTokens:
+  implicit val codec: JsonCodec[ProviderOAuthTokens] = DeriveJsonCodec.gen[ProviderOAuthTokens]
 
-case class Session(userId: String, roles: List[String])  // This is the payload of the JWT token and can contain other things like roles, etc.
 
 // For testability, everything runs on ZIO Clock, so it can be manipulated in tests
 // by TestClock.  However, the JWT library uses Java Clock.  This is a conversion utility
@@ -59,3 +70,7 @@ object ClockConverter {
     }
   }
 }
+
+// URL-encode a string
+def encode(value: String): String = URLEncoder.encode(value, StandardCharsets.UTF_8.toString)
+def base64UrlDecode(data: String): Array[Byte] = Base64.getUrlDecoder.decode(data)

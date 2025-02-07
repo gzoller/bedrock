@@ -1,0 +1,92 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Welcome to Your App</title>
+    <script>
+        // ✅ Function to get query parameter from URL
+        function getQueryParam(name) {
+            const urlParams = new URLSearchParams(window.location.search);
+            return urlParams.get(name);
+        }
+
+        // ✅ Function to get a cookie by name
+        function getCookie(name) {
+            const match = document.cookie.match(new RegExp('(^| )' + name + '=([^;]+)'));
+            return match ? match[2] : null;
+        }
+
+        // ✅ Function to delete a cookie
+        function deleteCookie(name) {
+            document.cookie = `${name}=; Path=/; Secure; SameSite=Strict; Expires=Thu, 01 Jan 1970 00:00:00 UTC;`;
+        }
+
+        // ✅ Store session ID if provided in URL or keep existing cookie
+        function manageSession() {
+            const sessionId = getQueryParam("sessionId");
+            const existingSession = getCookie("sessionId");
+
+            if (sessionId) {
+                document.cookie = `sessionId=${sessionId}; Path=/; Secure; SameSite=Strict`;
+                console.log("Session ID stored in cookie:", sessionId);
+            } else if (existingSession) {
+                console.log("Session ID already present in cookie.");
+            } else {
+                console.log("No session ID found, redirecting to login...");
+                window.location.href = "landing.html";  // Redirect to login
+            }
+        }
+
+        // ✅ Function to call /hello with Bearer Auth and handle response
+        function callHelloEndpoint() {
+            const sessionId = getCookie("sessionId");
+            if (!sessionId) {
+                console.error("No session token found, redirecting...");
+                window.location.href = "landing.html";
+                return;
+            }
+
+            fetch("/api/hello", {
+                method: "GET",
+                headers: {
+                    "Accept": "text/plain",
+                    "Authorization": `Bearer ${sessionId}`
+                }
+            })
+            .then(response => {
+                if (response.status === 401) {
+                    console.warn("Unauthorized! Clearing session and redirecting...");
+                    deleteCookie("sessionId");
+                    window.location.href = "landing.html";  // Redirect to login
+                    throw new Error("Unauthorized");
+                }
+                if (!response.ok) {
+                    throw new Error(`HTTP Error! Status: ${response.status}`);
+                }
+                return response.text();  // Assuming the backend returns plain text
+            })
+            .then(data => {
+                console.log("Response from /hello:", data);
+                document.getElementById("hello-response").innerText = data;
+            })
+            .catch(error => {
+                console.error("Error calling /hello:", error);
+            });
+        }
+
+        // ✅ Run session check on page load
+        window.onload = manageSession;
+    </script>
+</head>
+<body>
+<h1>Welcome to Your App!</h1>
+<p>You are now logged in. Enjoy your experience!</p>
+
+<!-- ✅ Button to call /hello -->
+<button onclick="callHelloEndpoint()">Call /hello</button>
+
+<!-- ✅ Display response -->
+<p id="hello-response"></p>
+</body>
+</html>

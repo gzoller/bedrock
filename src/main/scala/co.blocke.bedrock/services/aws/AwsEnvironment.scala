@@ -39,7 +39,12 @@ object AwsEnvironment:
   def getRegion(awsConfig: AWSConfig): ZIO[Client, Nothing, Option[Region]] =
     (for {
       _ <- ZIO.logInfo("Checking for AWS")
-      responseOpt <- Client.batched(Request.get(awsConfig.regionUrl)).timeout(2.seconds) // Perform the HTTP request with timeout
+      responseFiber <- Client.batched(Request.get(awsConfig.regionUrl))
+                        .timeout(2.seconds)
+                        .forkDaemon  // Ensures it outlives parent scope
+      responseOpt <- responseFiber.join  // Waits for completion
+      // TODO: Remove the forkDaemon when debugging the exit 0 problem is complete
+      // responseOpt <- Client.batched(Request.get(awsConfig.regionUrl)).timeout(2.seconds) // Perform the HTTP request with timeout
       _ <- ZIO.logInfo(s"AWS said: $responseOpt")
       result <- responseOpt match {
         case Some(response) if response.status.isSuccess =>

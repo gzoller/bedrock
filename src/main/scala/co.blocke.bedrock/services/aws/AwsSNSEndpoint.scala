@@ -190,7 +190,7 @@ final case class LiveAwsSnsEndpoint(auth: Authentication, awsConfig: AWSConfig, 
           case "Notification" =>
             snsMessage.Message match {
               case Some(message) =>
-                auth.updateKeys
+                auth.updateKeys()
                   .as(200) // Return HTTP 200 if `updateKeys` succeeds
                   .catchAll { err =>
                     // Log the error and return HTTP 500 as the response status

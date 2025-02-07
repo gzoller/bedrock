@@ -2,267 +2,214 @@ package co.blocke.bedrock
 package services
 package auth
 
+import aws.AwsRedis
+import model.*
+import util.*
+
 import zio.*
+import zio.json.*
 import zio.http.*
 import zio.http.codec.*
 import zio.http.endpoint.AuthType
 import zio.http.endpoint.Endpoint
+import java.time.Duration
 
-import java.net.URLEncoder
-import java.nio.charset.StandardCharsets
-
-
-// This class is a (hopefully) generic OAuth 2.0 client for Bedrock. It is using Google's implementation.
-
-/* 
-Flow:  
-    
-    0. We want to protect as much info as possible, so front end redirects to a /login endpoint on the server.
-       The front end will pass the final redirect URL (where to go after login) as a query parameter
-
-    1. Server will get clientId, redirect_uri, scope, and state, then redirect to Provider (eg Google) for login.  
-      For Google (and most OpenID) the call will look like this:
-
-    https://accounts.google.com/o/oauth2/v2/auth?
-        client_id=YOUR_CLIENT_ID&
-        redirect_uri=https://your-backend.com/oauth2/callback&
-        response_type=code&
-        scope=email profile openid offline_access&
-        state=xyz123
-
-    https://accounts.google.com/o/oauth2/v2/auth?
-        client_id=593880049906-71491lin36bpaasbm6qu61v4cmn0fvrk.apps.googleusercontent.com&
-        redirect_uri=https://localhost:8073/callback&
-        response_type=code&
-        scope=email profile openid offline_access&
-        state=eyJ0ZW5hbnRQcmVmaXgiOiJiZWRyb2NrIiwibm9uY2UiOiJVRlVDR1FBTlpEV0JYWlFJIiwicmVkaXJlY3RUb1VybCI6ImZpbGU6Ly8vVXNlcnMvZ3pvbGxlci9tZS9naXQvYmVkcm9jay93ZWIvbWFpbi5odG1sIn0=       
-
-    (state is a random string to prevent CSRF)
-    (offline_access ensures a refresh token is returned--this should be configurable... certain apps may not need/want refresh if they're short-term)
-
-    2. Provider will redirect back to your backend with a code: https://your-backend.com/oauth2/callback?code=4/0AX4Xf...&state=xyz123
-
-    if user denies consent or other problem redirect looks like: https://your-backend.com/oauth2/callback?error=access_denied&state=xyz123
-
-    3. Now we exchange the code for an access token. Call this url: https://oauth2.googleapis.com/token
-       and provide the following as application/x-www-form-urlencoded in the body:
-
-    Parameter	    Description
-    code   	        The authorization code received in the redirect from Google.
-    client_id	    Your app’s Client ID from the Google Cloud Console.
-    client_secret	Your app’s Client Secret from the Google Cloud Console.
-    redirect_uri    The same redirect URI you specified when you initiated the authorization request.
-    grant_type      Must be authorization_code for this step.
-
-    For example: (plaintext)
-    code=4/0AX4XfWhExampleCode&
-    client_id=your-client-id.apps.googleusercontent.com&
-    client_secret=your-client-secret&
-    redirect_uri=https://your-backend.com/oauth2/callback&
-    grant_type=authorization_code
-
-    Google sends back: 
-        {
-          "access_token": "ya29.a0AfH6SMD....",
-          "expires_in": 3599,
-          "refresh_token": "1//04iGaa6O...",
-          "scope": "https://www.googleapis.com/auth/userinfo.email https://www.googleapis.com/auth/userinfo.profile",
-          "token_type": "Bearer",
-          "id_token": "eyJhbGciOiJSUzI1NiIsInR5c..."
-        }
-    
-    4. Verify the tokens:
-        - Check signature of the tokens, Google's certs here: https://www.googleapis.com/oauth2/v3/certs
-        - Check issuer (must be https://accounts.google.com for Google)
-        - Check audience (must be your client ID)
-        - Check Expiration (ensure its not expired)
-        - Check scopes (ensure they are what you expect/need)
-
-        Sample code in ZIO:
-            def validateAccessToken(token: String): ZIO[Any, Throwable, JwtClaim] = {
-                for {
-                    keys <- ZIO.attempt {
-                    val jwkSet = JwkSet.loadFrom("https://www.googleapis.com/oauth2/v3/certs")
-                    jwkSet.keys
-                    }
-                    claim <- JwtToken.jwtDecode(token, keys)
-                    _ <- ZIO.fail(new RuntimeException("Token expired")).when(claim.isExpired)
-                    _ <- ZIO.fail(new RuntimeException("Invalid issuer")).when(claim.issuer != Some("https://accounts.google.com"))
-                    _ <- ZIO.fail(new RuntimeException("Invalid audience")).when(claim.audience != Some("your-client-id.apps.googleusercontent.com"))
-                } yield claim
-            }
-
-        If access token is expired, return 401 Unauthorized. Client then can use refresh token to get a new access token.
-
-    5. To refresh an expired access token, call: https://oauth2.googleapis.com/token with the following as application/x-www-form-urlencoded in the body:
-
-            Parameter       Description
-            client_id       Your app’s Client ID from the Google Cloud Console.
-            client_secret   Your app’s Client Secret from the Google Cloud Console.
-            refresh_token   The refresh token obtained during the initial authorization flow.
-            grant_type      Must be refresh_token for this exchange.
-
-            Response: 
-                {
-                "access_token": "ya29.a0AfH6SM...",
-                "expires_in": 3599,
-                "scope": "openid email profile",
-                "token_type": "Bearer",
-                "id_token": "eyJhbGciOiJSUzI1NiIsInR5cCI6IkpXVCJ9..."
-                }             
-
-            or error:
-                {
-                "error": "invalid_grant",
-                "error_description": "Token has been expired or revoked."
-                }   
-
-                possible error values: invalid_grant (bad refresh token), invalid_client (bad client ID or secret), unsupported_grant_type (bad grant type)
-
-    6. To get the user's ID info: it's all encoded in the JWT id token
- */
 
 trait OAuth2:
   def routes: Routes[Any, Response]  // callback for tokens from provider
-  // def refreshAccessToken(refreshToken: RefreshToken): ZIO[Any, Throwable, AccessToken] // refresh token
-  // def getTokens(code: String, scopes: List[String]): ZIO[Any, Throwable, (AccessToken, IDToken, Option[RefreshToken])] // get auth token from provider
-  // def getIdData(idToken: IDToken): ZIO[Any, Throwable, Map[String,String]] // get user data from ID token
 
 /* 
 Endpoints: 
     /login      (Bedrock Auth)
+    /login      (OpenID)
+    /login      (Session auth--returning user)
     /callback   (OpenID)
     /userinfo   (OpenID)  (use server-generated session token to retrieve user info)
  */
   
 final case class LiveOAuth2(
+  authConfig: AuthConfig,
+  auth: Authentication,
+  client: Client,
+  redis: AwsRedis,
   clientId: String, 
   clientSecret: String, 
-  tenantPrefix: String, 
-  callbackBaseUrl: String,
-  oauthConfig: OAuthConfig) extends OAuth2: 
+  validator: Validator
+  ) extends OAuth2:
 
-  val validator = Validator(oauthConfig.provider, oauthConfig.scopes)
 
-  // [==== Redirect HandlerAspect ====]
+  // [==== /login Endpoint (OpenID Auth) ====]
 
-  val redirectAspect: HandlerAspect[Any, Unit] =
-    HandlerAspect.interceptOutgoingHandler(
-      Handler.fromFunctionZIO { (response: Response) =>
-        response.body.asString.either.flatMap { // Convert failure to Either
-          case Left(error) =>
-            ZIO.succeed(Response.text(s"Failed to read response body: ${error.getMessage}").status(Status.InternalServerError))
-          
-          case Right(rawUrl) =>
-            URL.decode(rawUrl) match {
-              case Right(url) => ZIO.succeed(Response.redirect(url))
-              case Left(e)    => ZIO.succeed(Response.text(s"Invalid redirect URL: $rawUrl").status(Status.BadRequest))
-            }
-        }
-      }
-    )
-
-  // [==== /login Endpoint ====]
-
-  val loginProxyEndpoint: Endpoint[Unit, (String,String), ZNothing, String, AuthType.None] = Endpoint(RoutePattern.GET / "login_proxy")
+  /**
+    * This endpoint is called by the UI to initiate the login process when using a non-Bedrock OAuth provider.  
+    * It redirects to the OAuth2 provider. The purpose of this proxy is to hide knowledge of tokens, etc., from
+    * the client.
+    */
+  private val loginProxyEndpoint_O: Endpoint[Unit, (String,String), ZNothing, String, AuthType.None] = Endpoint(RoutePattern.GET / "api" / "login_proxy")
     .query(HttpCodec.query[String]("redirect_location"))
     .query(HttpCodec.query[String]("state"))
     .out[String](MediaType.text.plain)
 
-  val loginProxyHandler: Handler[Any, Nothing, (String,String), String] = handler { (redirectLocation: String, initialState: String) =>
-    val sessionId = "session:state:"+UUIDUtil.base64Id
-    val rawEncodedState = State(sessionId, tenantPrefix, initialState, redirectLocation).encode
-    FakeSessionCache.put(sessionId, rawEncodedState)
+  private val loginProxyHandler_O: Handler[Any, Nothing, (String,String), String] =
+    Handler.fromFunctionZIO { (redirectLocation: String, nonce: String) =>
+      val stateId = UUIDutil.base64Id
+      val jsEncodedState = State(stateId, authConfig.tenantPrefix, nonce, redirectLocation).toEncodedJson
+      for {
+        // Set the state in Redis for only 5 min--just long enough to get the callback from the provider
+        _ <- redis.set(stateId, jsEncodedState, Some(5.minutes))
+        _ <- ZIO.logInfo("!!! !!! !!! Redirect URL: "+authConfig.callbackBaseUrl+"/api/oauth2/callback")
+      } yield s"${authConfig.oauthConfig.authUrl}?" +
+              s"client_id=${encode(clientId)}&" + 
+              s"redirect_uri=${encode(authConfig.callbackBaseUrl + "/api/oauth2/callback")}&" +
+              s"""scope=${encode(authConfig.oauthConfig.scopes.mkString(" "))}&""" +
+              s"state=${encode(jsEncodedState)}&" +
+              "response_type=code&"
+//              "access_type=offline"  // Google-specific parameter, ignored by others
+              // NOTE: For Auth0/Okta, add offline_access to scope to trigger return of refresh token
+      }
 
-    val redirectUri = URLEncoder.encode(callbackBaseUrl + "/oauth2/callback", StandardCharsets.UTF_8.toString)
-    val scope = URLEncoder.encode(oauthConfig.scopes.mkString(" "), StandardCharsets.UTF_8.toString)
-    val encodedState = URLEncoder.encode(rawEncodedState, StandardCharsets.UTF_8.toString)
-    val encodedClientId = URLEncoder.encode(clientId, StandardCharsets.UTF_8.toString)
+  private val loginProxyRoute_O = Routes(loginProxyEndpoint_O.implementHandler(loginProxyHandler_O)) @@ HTTPutil.redirectAspect
 
-    s"${oauthConfig.authUrl}?client_id=$encodedClientId&access_type=offline&redirect_uri=$redirectUri&response_type=code&scope=$scope&state=$encodedState"
+
+  // [==== /login Endpoint (Session -- Returning login) ====]
+
+  /*
+  val loginProxyEndpoint_S: Endpoint[Unit, String, ZNothing, String, AuthType.None] = Endpoint(RoutePattern.GET / "login_proxy")
+    .query(HttpCodec.query[String]("sessionId"))
+    .out[String](MediaType.text.plain)
+
+  val loginProxyHandler_S: Handler[Any, Nothing, String, String] = handler { (sessionId: String) =>
+    val session = FakeSessionCache.get(sessionId)
+    "foo"
+    // s"${oauthConfig.authUrl}?" +
+    // s"client_id=${encode(clientId)}&" + 
+    // "access_type=offline&" +
+    // s"redirect_uri=${encode(callbackBaseUrl + "/oauth2/callback")}&" +
+    // "response_type=code&" +
+    // s"""scope=${encode(oauthConfig.scopes.mkString(" "))}&""" +
+    // s"state=${encode(rawEncodedState)}"
   }
 
-  val loginProxyRoute: Routes[Any, Nothing] = Routes(loginProxyEndpoint.implementHandler(loginProxyHandler)) @@ redirectAspect
+  val loginProxyRoute_S = Routes(loginProxyEndpoint_S.implementHandler(loginProxyHandler_S)) @@ redirectAspect
+  */
 
 
-  // [==== /callback Endpoint ====]
+  // [==== /callback Endpoint ====] (used for non-Bedrock OAuth providers)
 
-  val callbackEndpoint: Endpoint[Unit, Map[String, String], ZNothing, String, AuthType.None] = 
-    Endpoint(RoutePattern.GET / "oauth2" / "callback")
-      .query(HttpCodec.queryAll[Map[String,String]]) // Captures all query parameters dynamically
-      .out[String](MediaType.text.plain)
+  private val callbackHandler: Handler[Any, Nothing, Request, Response] =
+    Handler.fromFunctionZIO { (req: Request) =>
+      // Extract query parameters to a Map[String,String]
+      val qparams = req.queryParameters.map.map { case (k, v) => k -> v.mkString(",") }
 
-  val callbackHandler: Handler[Any, Nothing, Map[String,String], String] = handler { (qparams: Map[String,String]) =>
-    Handler.fromFunctionZIO { _ =>
-      for {
-        _         <- validator.validateParams(qparams, oauthConfig.scopes)
-        code      <- ZIO.fromOption(qparams.get("code")).orElseFail(new RuntimeException("No code in callback"))
-        body =    Body.fromString(
-                    s"code=$code&client_id=$clientId&client_secret=$clientSecret&redirect_uri=$callbackBaseUrl/oauth2/callback&grant_type=authorization_code"
-                  )
-        response  <- Client.batched(Request.post(oauthConfig.tokenUrl, body)
-                       .addHeader(Header.ContentType(MediaType.application.`x-www-form-urlencoded`)))
-        respBody  <- response.body.asString
-        _ <- ZIO.succeed(println("GOOGLE RESPONSE (tokens): "+body))
-      } yield code
+      (for {
+        state     <- validator.validateParams(qparams, authConfig.oauthConfig.scopes, redis)
+        code      <- ZIO.fromOption(qparams.get("code"))
+                      .orElseFail(new IllegalArgumentException("No code in callback"))
+        body      =  Body.fromString(
+                        s"code=${encode(code)}" +
+                        "&grant_type=authorization_code" +
+                        s"&client_id=${encode(clientId)}" +
+                        s"&client_secret=${encode(clientSecret)}" +
+                        s"&redirect_uri=${encode(authConfig.callbackBaseUrl + "/api/oauth2/callback")}" +
+                        validator.tokenQueryExtraFields
+                      )
+        // Call to exchange code for token set. This is a blocking call, in case it takes "a while"
+        response <- client.batched(
+                      Request.post(authConfig.oauthConfig.tokenUrl, body)
+                        .addHeader(Header.ContentType(MediaType.application.`x-www-form-urlencoded`))
+                    )
+        oauthTokensJS  <- response.body.asString
+        providerTokens <- ZIO.fromEither(oauthTokensJS.fromJson[ProviderOAuthTokens])
+        userProfile <- validator.verifyIdToken(providerTokens.id_token)
+        clock       <- ZIO.clock
+        now         <- clock.instant
+        _ <- ZIO.logInfo("GOOGLE RESPONSE (tokens): "+providerTokens)
+
+        // TODO: Query some DB to get user's roles for the tokens
+
+        sessionId   <- auth.issueSessionToken(userProfile.userId, List.empty[String])
+        brAccessToken <- auth.issueAccessToken(userProfile.userId, List("user"))
+        brRefreshToken <- auth.issueSessionToken(userProfile.userId, List("user"))
+
+        // For each session we cache 2 things:
+        // 1. userId -> Session, lifespan: max session lifespan
+        // 2. sessionId -> brAccessToken, lifespan: inactivity period
+        // If sessionId is gone (timed-out), delete the userId mapping
+        // This dual-caching saves having to parse/re-encode JSON on each and every API request!
+        // The sessionId encodes the userId, so even if expired, we can use it to get the Session
+        // and refresh the sessionId->brAccessToken in cache
+        _ <- redis.set(
+          userProfile.userId,
+          Session(
+            userProfile, 
+            OAuthTokens(
+              Some(now),
+              Some(providerTokens.access_token),
+              providerTokens.refresh_token,
+              brRefreshToken
+            )
+          ).toJson, 
+          Some(Duration.ofSeconds(authConfig.sessionLifespanSec)))
+        _ <- redis.set(
+          sessionId,
+          brAccessToken,
+          Some(Duration.ofSeconds(authConfig.sessionInactivitySec)))
+        redirectUrl <- ZIO.fromEither(URL.decode( state.redirectToUrl + s"?sessionId=$sessionId" ))
+      } yield Response.redirect(redirectUrl))
+      .catchAllCause { cause => 
+        ZIO.succeed(handleFailure(cause))
+      }
     }
 
-    /* 
-    After receiving this request:
+  private val callbackRoute: Routes[Any, Response] =
+    Routes(
+      Method.GET / "api" / "oauth2" / "callback" -> callbackHandler
+    )
 
-Verify the state parameter (to prevent CSRF attacks).
-Extract the code parameter.
-Exchange the code for an access token by making a POST request to Google.
+  private def handleFailure(cause: Cause[Throwable | String]): Response = cause match {
+    case Cause.Fail(error: Throwable, _) => 
+      Response.text(s"Bad Request: ${error.getMessage}").status(Status.BadRequest)
 
-POST https://oauth2.googleapis.com/token
-Content-Type: application/x-www-form-urlencoded
+    case Cause.Die(error: Throwable, _) =>
+      Response.text(s"Internal Server Error: ${error.getMessage}").status(Status.InternalServerError)
 
-client_id=YOUR_CLIENT_ID
-&client_secret=YOUR_CLIENT_SECRET
-&code=4/0ASVgi3JZ64yiwnCckEHIEUXOTK0D5z8S63CqT6Ag-6zI00Lxwf_8pPK4bB_jRfo6d026Kw
-&redirect_uri=https://localhost:8073/oauth2/callback
-&grant_type=authorization_code
+    case Cause.Interrupt(_,_) =>
+      Response.text("Request Interrupted").status(Status.RequestTimeout)
 
-Response:
-{
-  "access_token": "ya29.a0AfH6SM...",
-  "expires_in": 3600,
-  "refresh_token": "1//0g...",
-  "scope": "email profile openid",
-  "token_type": "Bearer",
-  "id_token": "eyJhbGciOiJIUzI1NiIs..."
-}
-     */
-    "Hello!"
+    case _ =>
+      Response.text("Unexpected Error").status(Status.InternalServerError)
   }
 
-  val callbackRoute: Routes[Any, Nothing] = Routes(callbackEndpoint.implementHandler(callbackHandler))// @@ redirectAspect
-
-  val routes: Routes[Any, Nothing] = loginProxyRoute ++ callbackRoute
+  val routes: Routes[Any, Response] = loginProxyRoute_O ++ callbackRoute
 
 
 object OAuth2:
-  def live: ZLayer[AuthConfig, Throwable, OAuth2] =
+  def live: ZLayer[AuthConfig & Client & AwsRedis & Authentication, Throwable, OAuth2] =
     val clientId = sys.env.getOrElse("OAUTH_CLIENT_ID","")
     val clientSecret = sys.env.getOrElse("OAUTH_CLIENT_SECRET","")
     ZLayer.fromZIO {
       for {
+        _          <- ZIO.logInfo("OAuth2: Getting config")
         authConfig <- ZIO.service[AuthConfig]
+        _          <- ZIO.logInfo("OAuth2: Getting Client")
+        client     <- ZIO.service[Client]
+        _          <- ZIO.logInfo("OAuth2: Getting Redis")
+        redis      <- ZIO.service[AwsRedis]
+        _          <- ZIO.logInfo("OAuth2: Getting Authentication")
+        auth       <- ZIO.service[Authentication]
+        _          <- ZIO.logInfo("OAuth2: Setting Validator")
+        validator  <- Validator.apply(
+                        authConfig.oauthConfig.provider, 
+                        authConfig.oauthConfig.providerCertsUrl
+                        )
+        _          <- ZIO.logInfo("OAuth2: Creating LiveOAuth2")
       } yield LiveOAuth2(
+        authConfig,
+        auth,
+        client,
+        redis,
         clientId, 
         clientSecret, 
-        authConfig.tenantPrefix,
-        authConfig.callbackBaseUrl,
-        authConfig.oauthConfig
+        validator,
         )
     }
-
-
-    /* 
-    
-    So we have different needs/use cases here.
-
-    1. Highly secure: needs very short (a few min) access token TTL, and a refresh token
-    2. "Commerce-grade": (eg single-page app) 1 hr Google access token and no refresh token
-    3. Mobile-ready (incl long-runnign web apps): 1 day Google access token with refresh token to re-auth w/o user login
-     */

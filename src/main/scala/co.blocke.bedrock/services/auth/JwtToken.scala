@@ -36,7 +36,7 @@ object JwtToken:
   enum TokenError:
     case BadSignature, Expired, BadPayload, NoSubject, OtherProblem
 
-  // Ok, so the JWT library we're using is a bit of a mess.  It encodes subjects fine/consistently, but
+  // Ok, so the JWT library we're using is a bit of a mess.  It encodes subjects consistently, but
   // upon decode it sometimes puts the subject in the "sub" field and sometimes in the "content" field.
   // No clear reason why--so we have to accomodate either and force standardization.
   private def fixClaim(claim: JwtClaim): ZIO[Any, TokenError, JwtClaim] = {
@@ -66,7 +66,12 @@ object JwtToken:
       )
     }
 
-  private[auth] def jwtEncode(subject: String, key: String, expireSec: Long, roles: List[String])(implicit clock: zio.Clock): ZIO[Any, Throwable, String] =
+  private[auth] def jwtEncode(
+    subject: String, 
+    key: String, 
+    expireSec: Long, 
+    roles: List[String] = List.empty[String]
+    )(implicit clock: zio.Clock): ZIO[Any, Throwable, String] =
     for {
       now <- clock.instant.map(_.getEpochSecond) // Dynamically fetch the current time
       claim = JwtClaim(subject = Some(subject))
@@ -97,36 +102,66 @@ object JwtToken:
   )(implicit clock: zio.Clock): ZIO[Any, TokenError, JwtClaim] = 
     (for {
       claim <- ZIO.fromTry(
-            Jwt(ClockConverter.dynamicJavaClock(clock))
+          Jwt(ClockConverter.dynamicJavaClock(clock))
             .decode(token, key, Seq(JwtAlgorithm.HS512), JwtOptions(leeway = leewaySec, expiration = true)))
-            .mapError( _ match {
-              case _: exceptions.JwtExpirationException => TokenError.Expired
-              case e: exceptions.JwtValidationException => TokenError.BadSignature
-              case x                                    => TokenError.OtherProblem
-            })
+        .mapError {
+          case _: exceptions.JwtExpirationException => TokenError.Expired
+          case e: exceptions.JwtValidationException => TokenError.BadSignature
+          case x => TokenError.OtherProblem
+        }
       fixedClaim <- fixClaim(claim)
     } yield (fixedClaim))
-    
-  private[auth] def refreshToken(
-    token: String,
-    decodeWith: String,
-    encodeNewKey: String,
-    leewaySec: Long,
-    expirationSec: Long
-  )(implicit clock: zio.Clock): ZIO[Any, TokenError, (JwtClaim, String)] = 
+
+  /**
+   * This is a wee mess in order to accomodate the fact that the secret keys can rotate, and when the do, we don't
+   * want to inconvenience the user if we can avoid it. So long as the previous key works, simply re-encodde the
+   * access token with the new key. We don't worry about the session key--it gets the same "previous" treatment
+   * but will gracefully age out and does not need to be refreshed.
+   */
+  private[auth] def refreshAccessToken(
+     oldAccessToken: String,
+     refreshToken: String,
+     accessTokenKey: String,
+     prevAccessTokenKey: Option[String],
+     leewaySec: Long,  // should be session TTL to be safe (if older than session we're dead anyway)
+     refreshTokenKey: String,
+     accessExpirationSec: Long
+   )(implicit clock: zio.Clock): ZIO[Any, TokenError, String] =
     for {
-      now <- clock.instant
-      // Decode the token allowing for extra time (refresh_window_sec from config) to see if it is still in the
-      // refresh window
-      sloppyClaim <- jwtDecode(token, decodeWith, leewaySec)
-      newToken <- sloppyClaim.subject match {
-        case None => ZIO.fail(TokenError.NoSubject)
-        case _ => 
-          // Re-encode the token with a new expiration time
-          jwtEncode(sloppyClaim, encodeNewKey, expirationSec)
-            .mapError(_ => TokenError.OtherProblem)
+      // Ensure refresh token is good
+      _ <- jwtDecode(refreshToken, refreshTokenKey)
+
+      // Get the access token's claim, accounting for possible secret key rotation
+      accessClaim <- jwtDecode(oldAccessToken, accessTokenKey, leewaySec).catchSome{
+        case TokenError.BadSignature if prevAccessTokenKey.isDefined => jwtDecode(oldAccessToken, prevAccessTokenKey.get, leewaySec) // try with previous key or fail
       }
-    } yield (sloppyClaim, newToken)
+
+      // Encode a new access token, maintaining other info, eg roles
+      newAccessToken <- jwtEncode(accessClaim, accessTokenKey, accessExpirationSec)
+        .mapError(_ => TokenError.OtherProblem)
+    } yield newAccessToken
+
+//
+//  private[auth] def refreshToken(
+//    token: String,
+//    decodeWith: String,
+//    encodeNewKey: String,
+//    leewaySec: Long,
+//    expirationSec: Long
+//  )(implicit clock: zio.Clock): ZIO[Any, TokenError, (JwtClaim, String)] =
+//    for {
+//      now <- clock.instant
+//      // Decode the token allowing for extra time (refresh_window_sec from config) to see if it is still in the
+//      // refresh window
+//      sloppyClaim <- jwtDecode(token, decodeWith, leewaySec)
+//      newToken <- sloppyClaim.subject match {
+//        case None => ZIO.fail(TokenError.NoSubject)
+//        case _ =>
+//          // Re-encode the token with a new expiration time
+//          jwtEncode(sloppyClaim, encodeNewKey, expirationSec)
+//            .mapError(_ => TokenError.OtherProblem)
+//      }
+//    } yield (sloppyClaim, newToken)
 
   private[auth] def getRoles(claim: JwtClaim, roleFieldName: Option[String] = None): ZIO[Any, TokenError, List[String]] = {
     // Define the possible keys that can represent "roles"
