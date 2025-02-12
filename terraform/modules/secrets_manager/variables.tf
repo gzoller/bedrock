@@ -24,7 +24,12 @@ variable "vpc_role_name" {
   type        = string
 }
 
-#variable "rotation_lambda_arn" {
-#  description = "ARN of the Lambda function for secret rotation"
-#  type        = string
-#}
+variable "sns_publish_policy_arn" {
+  description = "ARN that gives us permission to publish to SNS"
+  type        = string
+}
+
+variable "sns_topic_arn" {
+  description = "ARN for topic to publish onto SNS on rotation"
+  type        = string
+}

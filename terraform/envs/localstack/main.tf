@@ -8,40 +8,22 @@ module "vpc" {
   trusted_services     = ["ec2.amazonaws.com", "lambda.amazonaws.com"]
 }
 
-module "secrets_manager" {
-    source             = "../../modules/secrets_manager"
-    region             = var.region
-    account_id         = var.account_id
-    vpc_id             = module.vpc.vpc_id
-    vpc_cidr           = module.vpc.vpc_cidr
-    private_subnet_ids = module.vpc.private_subnet_ids
-    vpc_role_name      = module.vpc.vpc_role_name
-}
-
 module "sns" {
     source             = "../../modules/sns"
     topic_names        = ["SecretKeyRotation"]
 }
 
-#module "lambda_rotation" {
-#  source             = "../../modules/lambda_rotation"
-  #lambda_role_arn    = module.iam.lambda_role_arn
-#  secrets_to_rotate  = ["BedrockAccessKey", "BedrockSessionKey"]
-  #sns_topic_arn      = module.sns.secret_rotation_arn
-#  private_subnet_ids = module.vpc.private_subnet_ids
-#  security_group_id  = module.vpc.lambda_security_group
-#  lambda_name        = "SecretsRotationLambda"
-#  secrets_arns       = [module.secrets_manager.bedrock_access_key_arn, module.secrets_manager.bedrock_session_key_arn]
-#  kms_key_arn        = module.secrets_manager.kms_key_arn
-#}
-
-#module "iam_rotation" {
-#  source        = "../../modules/iam_rotation"
-#  role_name     = "LambdaSecretsRotationRole"
-#  secrets_arns  = var.secrets_arns
-#  kms_key_arn   = var.kms_key_arn
-#  sns_topic_arn = var.sns_topic_arn
-#}
+module "secrets_manager" {
+    source                   = "../../modules/secrets_manager"
+    region                   = var.region
+    account_id               = var.account_id
+    vpc_id                   = module.vpc.vpc_id
+    vpc_cidr                 = module.vpc.vpc_cidr
+    private_subnet_ids       = module.vpc.private_subnet_ids
+    vpc_role_name            = module.vpc.vpc_role_name
+    sns_publish_policy_arn   = module.sns.sns_publish_policy_arn
+    sns_topic_arn            = lookup(module.sns.sns_topic_arns, "SecretKeyRotation", null)
+}
 
 output "private_subnet_ids" {
   value = module.vpc.private_subnet_ids

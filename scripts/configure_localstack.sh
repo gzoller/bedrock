@@ -10,9 +10,9 @@ NC='\033[0m' # No Color
 export TF_VAR_environment="localstack"
 export TF_VAR_aws_access_key="test"
 export TF_VAR_aws_secret_key="test"
-cd /terraform
+cd /terraform/envs/localstack
 tflocal init
-tflocal apply -var-file=envs/localstack/terraform.tfvars -auto-approve
+tflocal apply -auto-approve
 
 # Install Mini_HTTPD if not installed
 echo "Updating package lists..."

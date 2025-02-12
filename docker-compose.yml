@@ -22,14 +22,15 @@ services:
       - "./terraform:/terraform"   # Mount Terraform configuration
       - "./unmanaged/terraform_1.5.7_linux_amd64.zip:/tmp/terraform.zip"
     environment:
-      - SERVICES=lambda,secretsmanager,sns,iam,sts # Enable only required services
+      - SERVICES=lambda,secretsmanager,sns,iam,sts,ec2 # Enable only required services
       - DOCKER_HOST=unix:///var/run/docker.sock
     healthcheck:
       test: >
         curl --silent --fail http://localhost:8085
-      interval: 5s
-      timeout: 3s
-      retries: 5
+      interval: 30s
+      timeout: 10s
+      retries: 10
+      start_period: 30s
     networks:
       great-network:
         aliases:

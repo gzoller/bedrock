@@ -104,30 +104,110 @@ resource "aws_kms_key" "secrets_kms" {
 }
 
 #
-# Set up secret rotation
-#
-#resource "aws_secretsmanager_secret_rotation" "bedrock_access_key_rotation" {
-#  secret_id           = aws_secretsmanager_secret.bedrock_access_key.id
-#  rotation_lambda_arn = var.rotation_lambda_arn
-
-#  rotation_rules {
-#    automatically_after_days = 10
-#  }
-#}
-
-#resource "aws_secretsmanager_secret_rotation" "bedrock_session_key_rotation" {
-#  secret_id           = aws_secretsmanager_secret.bedrock_session_key.id
-#  rotation_lambda_arn = var.rotation_lambda_arn
-
-#  rotation_rules {
-#    automatically_after_days = 30
-#  }
-#}
-
-#
 # Attach SecretsManager to our vpc role
 #
 resource "aws_iam_role_policy_attachment" "attach_secrets_policy" {
   role       = var.vpc_role_name
   policy_arn = aws_iam_policy.secrets_policy.arn
+}
+
+
+#
+# Secrets Rotation Lambda
+#
+#
+# Create an SNS topic for secret rotation notifications
+#
+resource "aws_sns_topic" "secrets_rotation" {
+  name = "secrets-rotation-topic"
+}
+
+#
+# Create an IAM Role for the Lambda
+#
+resource "aws_iam_role" "secrets_rotation_lambda_role" {
+  name = "secrets-rotation-lambda-role"
+
+  assume_role_policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Principal = { Service = "lambda.amazonaws.com" }
+      Action = "sts:AssumeRole"
+    }]
+  })
+}
+
+#
+# Attach policies to the Lambda role
+#
+resource "aws_iam_policy" "secrets_rotation_lambda_policy" {
+  name        = "SecretsRotationLambdaPolicy"
+  description = "Permissions for the secrets rotation Lambda"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect   = "Allow"
+        Action   = ["secretsmanager:GetSecretValue", "secretsmanager:DescribeSecret", "secretsmanager:PutSecretValue", "secretsmanager:UpdateSecretVersionStage"]
+        Resource = [
+          aws_secretsmanager_secret.access_key.arn,
+          aws_secretsmanager_secret.session_key.arn
+        ]
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["sns:Publish"]
+        Resource = aws_sns_topic.secrets_rotation.arn
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["logs:CreateLogGroup", "logs:CreateLogStream", "logs:PutLogEvents"]
+        Resource = "*"
+      }
+    ]
+  })
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_sns_publish_attach" {
+  role       = aws_iam_role.secrets_rotation_lambda_role.name
+  policy_arn = var.sns_publish_policy_arn
+}
+
+#
+# Deploy the Lambda Function
+#
+resource "aws_lambda_function" "secrets_rotation" {
+  function_name    = "SecretsRotationFunction"
+  runtime         = "python3.9"
+  handler         = "rotationLambda.lambda_handler"
+  role           = aws_iam_role.secrets_rotation_lambda_role.arn
+  filename       = "${path.module}/rotationLambda.zip" # Pre-packaged Lambda deployment
+  source_code_hash = filebase64sha256("${path.module}/rotationLambda.zip")
+
+  environment {
+    variables = {
+      SNS_TOPIC_ARN = var.sns_topic_arn
+    }
+  }
+}
+
+#
+# Enable Rotation for Secrets
+#
+resource "aws_secretsmanager_secret_rotation" "access_key_rotation" {
+  secret_id           = aws_secretsmanager_secret.access_key.id
+  rotation_lambda_arn = aws_lambda_function.secrets_rotation.arn
+  rotation_rules {
+    automatically_after_days = 10
+  }
+}
+
+resource "aws_secretsmanager_secret_rotation" "session_key_rotation" {
+  secret_id           = aws_secretsmanager_secret.session_key.id
+  rotation_lambda_arn = aws_lambda_function.secrets_rotation.arn
+  rotation_rules {
+    automatically_after_days = 30
+  }
 }
