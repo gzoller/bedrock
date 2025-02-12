@@ -10,14 +10,20 @@ services:
     ports:
       - "4566:4566"            # LocalStack Gateway
       - "8085:8085"            # LocalStack custom health check
-    entrypoint: sh -c "apt-get update && apt-get install -y jq && exec /usr/local/bin/docker-entrypoint.sh localstack"
+    entrypoint: sh -c "/usr/local/bin/prestart.sh && exec /usr/local/bin/docker-entrypoint.sh localstack"
     volumes:
       - "/var/run/docker.sock:/var/run/docker.sock"
       - "./scripts/shutdown.sh:/etc/localstack/init/shutdown.d/shutdown.sh"
+      - "./scripts/prestart.sh:/usr/local/bin/prestart.sh"
       - "./scripts/configure_localstack.sh:/etc/localstack/init/ready.d/script.sh"
       - "./scripts/rotationLambda.zip:/scripts/rotationLambda.zip"
       - "./certs/server.crt:/usr/local/share/ca-certificates/server.crt" # Mount the certificate
       - "./certs/server.key:/usr/local/share/ca-certificates/server.key"
+      - "./terraform:/terraform"   # Mount Terraform configuration
+      - "./unmanaged/terraform_1.5.7_linux_amd64.zip:/tmp/terraform.zip"
+    environment:
+      - SERVICES=lambda,secretsmanager,sns,iam,sts # Enable only required services
+      - DOCKER_HOST=unix:///var/run/docker.sock
     healthcheck:
       test: >
         curl --silent --fail http://localhost:8085

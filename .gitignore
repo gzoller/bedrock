@@ -42,3 +42,24 @@ volume/
 
 # certs
 certs/
+
+# Terraform state files (contain sensitive info)
+terraform.tfstate
+terraform.tfstate.backup
+
+# Terraform working directory (caches provider plugins, local metadata)
+.terraform/
+
+# Terraform lock file (machine-specific, can be safely ignored in most cases)
+.terraform.lock.hcl
+
+# Terraform variable files (optional, if they contain secrets)
+*.tfvars
+*.tfvars.json
+
+# Crash logs (debugging information for Terraform)
+crash.log
+
+# Ignore Terraform execution plan output (if manually saved)
+*.tfplan
+
