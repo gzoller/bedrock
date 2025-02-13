@@ -89,8 +89,16 @@ resource "aws_kms_key" "secrets_kms" {
     Version = "2012-10-17"
     Statement = [
       {
+        Effect = "Allow"
+        Principal = { "AWS" = "arn:aws:iam::${var.account_id}:root" }
+        Action = "kms:*"
+        Resource = "*"
+      },
+      {
         Effect    = "Allow"
-        Principal = { "AWS" = "arn:aws:iam::${var.account_id}:role/my-vpc-role" }
+        Principal = {
+          "AWS" = ["arn:aws:iam::${var.account_id}:role/${var.vpc_role_name}"]
+        }
         Action    = "kms:Decrypt"
         Resource  = "*"
         Condition = {
@@ -115,12 +123,6 @@ resource "aws_iam_role_policy_attachment" "attach_secrets_policy" {
 #
 # Secrets Rotation Lambda
 #
-#
-# Create an SNS topic for secret rotation notifications
-#
-resource "aws_sns_topic" "secrets_rotation" {
-  name = "secrets-rotation-topic"
-}
 
 #
 # Create an IAM Role for the Lambda
@@ -159,7 +161,7 @@ resource "aws_iam_policy" "secrets_rotation_lambda_policy" {
       {
         Effect   = "Allow"
         Action   = ["sns:Publish"]
-        Resource = aws_sns_topic.secrets_rotation.arn
+        Resource = var.sns_topic_arn
       },
       {
         Effect   = "Allow"
@@ -191,6 +193,14 @@ resource "aws_lambda_function" "secrets_rotation" {
       SNS_TOPIC_ARN = var.sns_topic_arn
     }
   }
+}
+
+# Explicitly allow Secrets Manager to invoke the Lambda function
+resource "aws_lambda_permission" "allow_secretsmanager" {
+  statement_id  = "AllowSecretsManagerInvoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.secrets_rotation.function_name
+  principal     = "secretsmanager.amazonaws.com"
 }
 
 #

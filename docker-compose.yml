@@ -20,7 +20,6 @@ services:
       - "./certs/server.crt:/usr/local/share/ca-certificates/server.crt" # Mount the certificate
       - "./certs/server.key:/usr/local/share/ca-certificates/server.key"
       - "./terraform:/terraform"   # Mount Terraform configuration
-      - "./unmanaged/terraform_1.5.7_linux_amd64.zip:/tmp/terraform.zip"
     environment:
       - SERVICES=lambda,secretsmanager,sns,iam,sts,ec2 # Enable only required services
       - DOCKER_HOST=unix:///var/run/docker.sock

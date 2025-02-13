@@ -16,7 +16,9 @@ resource "aws_iam_role" "sns_publish_role" {
     Version = "2012-10-17"
     Statement = [{
       Effect = "Allow"
-      Principal = "*"
+      Principal = {
+        Service = var.assume_publish_role_services
+      }
       Action = "sts:AssumeRole"
     }]
   })
@@ -54,7 +56,9 @@ resource "aws_iam_role" "sns_subscribe_role" {
     Version = "2012-10-17"
     Statement = [{
       Effect = "Allow"
-      Principal = "*"
+      Principal = {
+        Service = var.assume_subscribe_role_services
+      }
       Action = "sts:AssumeRole"
     }]
   })

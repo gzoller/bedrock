@@ -1,0 +1,20 @@
+terraform {
+  cloud {
+    organization = "Endpoint_Store"
+    workspaces {
+      name = "Bedrock"
+    }
+  }
+  required_providers {
+    aws = {
+      source  = "hashicorp/aws"
+      version = "~> 4.16"
+    }
+  }
+
+  required_version = ">= 1.2.0"
+}
+
+provider "aws" {
+  region = var.region
+}

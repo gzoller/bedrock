@@ -11,6 +11,9 @@ module "vpc" {
 module "sns" {
     source             = "../../modules/sns"
     topic_names        = ["SecretKeyRotation"]
+    assume_publish_role_services   = ["lambda.amazonaws.com"]
+    assume_subscribe_role_services = ["ec2.amazonaws.com"]
+
 }
 
 module "secrets_manager" {
