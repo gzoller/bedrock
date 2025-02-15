@@ -13,14 +13,13 @@ trait AwsEnvironment:
   def getRegion: Region
   def getCreds: (Option[java.net.URI], AwsCredentialsProvider)
 
-
 // This is the live/real implementation. Could produce a mock implementation to inject for testing
 final case class LiveAwsEnvironment(awsConfig: AWSConfig, region: Option[Region]) extends AwsEnvironment:
 
-  def isRunningLocally: Boolean = region.isEmpty
+  def isRunningLocally: Boolean = !awsConfig.liveAws
   def getRegion: Region = region.getOrElse(Region.US_EAST_1)
 
-  // This bit o'magic is needed to differentiate runinning locally on Localstack vs
+  // This bit o'magic is needed to differentiate running locally on Localstack vs
   // on real AWS. These values are used to build various AWS clients.
   def getCreds: (Option[java.net.URI], AwsCredentialsProvider) = 
     if isRunningLocally then 

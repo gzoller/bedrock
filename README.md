@@ -17,6 +17,7 @@ Starting point for REST service
   - Token rotation/expiration
   - Session (refresh) tokens
   - Role-based endpoint protection
+* KMS encryption of secrets (required for HIPAA)
 
 
 
@@ -45,7 +46,7 @@ TODO:
    -- Figure out AWS permissioning so a low-level dev can't deploy to prod but a sr-dev could
 * Figure out monitoring
 * Figure out advanced logging (eg with queries like splunk)
-* Investingate queryable event queue
+* Investigate queryable event queue
 * Integrate w/RDS
 
 ## Running

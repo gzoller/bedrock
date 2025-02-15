@@ -36,27 +36,32 @@ final case class LiveAwsSnsEndpoint(auth: Authentication, awsConfig: AWSConfig, 
   def subscribeToTopic(): ZIO[Any, Throwable, Unit] = 
     ZIO.attempt {
       // Create the SNS client
-      val (endpointOverride, credentialsProvider) = awsEnv.getCreds  
+      val (endpointOverride, credentialsProvider) = awsEnv.getCreds
       val snsClientBuilder = SnsClient.builder()
           .region(awsEnv.getRegion)
           .credentialsProvider(credentialsProvider)
       endpointOverride.foreach(snsClientBuilder.endpointOverride)
-      val snsClient = snsClientBuilder.build()        
+      val snsClient = snsClientBuilder.build()
 
       try {
+        val topicList = snsClient.listTopics().topics()
+        val topicArn = topicList.asScala.find(_.topicArn().contains(awsConfig.snsSecretRotationTopicName))
+          .getOrElse(throw new Exception(s"Expected SNS topic ${awsConfig.snsSecretRotationTopicName} was not found."))
+          .topicArn
+
         // Build the SubscribeRequest
         val subscribeRequest = SubscribeRequest.builder()
-          .topicArn(awsConfig.snsTopicArn)
+          .topicArn(topicArn)
           .attributes(Map("RawMessageDelivery" -> "true").asJava)
           .protocol("https")
-          .endpoint(awsConfig.callbackBaseUrl + "/sns-handler") // Update if necessary
+          .endpoint(awsConfig.snsSubscribeBaseUrl + "/api/sns-handler") // Update if necessary
           .build()
 
         // Subscribe to the topic
         val subscribeResponse = snsClient.subscribe(subscribeRequest)
         ()
       } catch {
-        case e => 
+        case e: Throwable =>
           ZIO.logError(s"Failed to subscribe to SNS topic: ${e.getMessage}")
           throw e
       } finally {
@@ -171,7 +176,7 @@ final case class LiveAwsSnsEndpoint(auth: Authentication, awsConfig: AWSConfig, 
     }
 
   val sns_endpoint: zio.http.endpoint.Endpoint[Unit, SnsMessage, ZNothing, Int, zio.http.endpoint.AuthType.None.type] = 
-    Endpoint(RoutePattern.POST / "sns-handler")     // Define POST endpoint
+    Endpoint(RoutePattern.POST / "api" / "sns-handler")     // Define POST endpoint
       .in[SnsMessage]
       .out[Int]                                     // Output: HTTP 200 status code (default)
 
@@ -215,7 +220,6 @@ object AwsSnsEndpoint:
         auth      <- ZIO.service[Authentication]
         awsConfig <- ZIO.service[AWSConfig]
         awsEnv    <- ZIO.service[AwsEnvironment]
-        promise   <- Promise.make[Throwable, String]
       } yield LiveAwsSnsEndpoint(auth, awsConfig, awsEnv)
     }
   }

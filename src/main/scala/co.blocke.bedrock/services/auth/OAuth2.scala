@@ -57,7 +57,6 @@ final case class LiveOAuth2(
       for {
         // Set the state in Redis for only 5 min--just long enough to get the callback from the provider
         _ <- redis.set(stateId, jsEncodedState, Some(5.minutes))
-        _ <- ZIO.logInfo("!!! !!! !!! Redirect URL: "+authConfig.callbackBaseUrl+"/api/oauth2/callback")
       } yield s"${authConfig.oauthConfig.authUrl}?" +
               s"client_id=${encode(clientId)}&" + 
               s"redirect_uri=${encode(authConfig.callbackBaseUrl + "/api/oauth2/callback")}&" +

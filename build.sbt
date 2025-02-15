@@ -66,6 +66,7 @@ lazy val root = (project in file("."))
 
     // Docker packaging settings
     dockerExposedPorts += 8073,
+    dockerBaseImage := "eclipse-temurin:21-jdk",
     dockerBaseImage := "openjdk:21",
     dockerBuildOptions += "--no-cache"
   )

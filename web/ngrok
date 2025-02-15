@@ -1,0 +1,1 @@
+ngrok http --domain=premium-mammoth-abnormally.ngrok-free.app https://localhost:8443

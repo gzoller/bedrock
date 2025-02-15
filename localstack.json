@@ -1,1 +1,0 @@
-{"completed": {"BOOT": true, "START": true, "READY": true, "SHUTDOWN": false}, "scripts": [{"stage": "READY", "name": "script.sh", "state": "SUCCESSFUL"}]}
