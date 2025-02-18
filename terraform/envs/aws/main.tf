@@ -29,6 +29,16 @@ module "secrets_manager" {
   sns_topic_arn            = lookup(module.sns.sns_topic_arns, "SecretKeyRotation", null)
 }
 
+module "elasticache" {
+  source        = "../../modules/elasticache"
+  name          = "bedrock"
+  vpc_id        = module.vpc.vpc_id
+  subnet_ids    = module.vpc.private_subnet_ids # Ensure these span multiple AZs
+  instance_type = "cache.t3.micro"
+  num_replicas  = 2  # 1 Primary + 2 Replicas (Adjust as needed)
+  allowed_cidrs = ["10.0.0.0/16"] # Adjust to your private network
+}
+
 output "private_subnet_ids" {
   value = module.vpc.private_subnet_ids
 }

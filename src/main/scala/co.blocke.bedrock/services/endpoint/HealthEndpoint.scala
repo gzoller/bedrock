@@ -10,7 +10,6 @@ import zio.http.endpoint.Endpoint
 import zio.schema.*
 
 import auth.Authentication
-import auth.model.*
 import aws.{AwsEnvironment,AwsSnsEndpoint}
 
 
@@ -46,23 +45,23 @@ final case class LiveHealthEndpoint(auth: Authentication, awsSnsEndpoint: AwsSns
     .out[String](MediaType.text.plain)
     .outError[Unit](Status.InternalServerError)
 
-  private val expire_token_handler: Handler[Session, Unit, (Long,Boolean), String] =
-    Handler.fromFunctionZIO { case (expired_by_sec: Long, isSession: Boolean) =>
-      ZIO.environmentWithZIO[Session] { env =>
-        val session = env.get[Session] // Extract the Session from ZEnvironment
-        auth.issueExpiredToken(expired_by_sec, session.profile.userId, isSession)
-          .mapError(_ => ()) // Convert Throwable to Unit to match the handler's error type
-          .provideEnvironment(env) // Re-provide the Session context
-      }
-    }
+//  private val expire_token_handler: Handler[Session, Unit, (Long,Boolean), String] =
+//    Handler.fromFunctionZIO { case (expired_by_sec: Long, isSession: Boolean) =>
+//      ZIO.environmentWithZIO[Session] { env =>
+//        val session = env.get[Session] // Extract the Session from ZEnvironment
+//        auth.issueExpiredToken(expired_by_sec, session.profile.userId, isSession)
+//          .mapError(_ => ()) // Convert Throwable to Unit to match the handler's error type
+//          .provideEnvironment(env) // Re-provide the Session context
+//      }
+//    }
 
-  private val expire_token_routes: Routes[Any, Nothing] = Routes(expire_token_endpoint.implementHandler(expire_token_handler)) @@ auth.bedrockProtected(List("test"))
+//  private val expire_token_routes: Routes[Any, Nothing] = Routes(expire_token_endpoint.implementHandler(expire_token_handler)) @@ auth.bedrockProtected(List("test"))
 
   private val key_bundle_endpoint: Endpoint[Unit, Unit, Unit, Int, endpoint.AuthType.None] = Endpoint(RoutePattern.GET / "key_bundle_version")
     .out[Int](MediaType.text.plain)
     .outError[Unit](Status.InternalServerError)
 
-  private val key_bundle_handler: Handler[Session, Unit, Unit, Int] =
+  private val key_bundle_handler: Handler[String, Unit, Unit, Int] =
     Handler.fromZIO( auth.getKeyBundleVersion )
 
   private val key_bundle_routes: Routes[Any, Nothing] = Routes(key_bundle_endpoint.implementHandler(key_bundle_handler)) @@ auth.bedrockProtected(List("test"))
@@ -70,7 +69,7 @@ final case class LiveHealthEndpoint(auth: Authentication, awsSnsEndpoint: AwsSns
 
   val routes: Routes[Any, Response] =
     if isRunningLocally then
-      health_routes ++ expire_token_routes ++ key_bundle_routes
+      health_routes //++ expire_token_routes ++ key_bundle_routes
     else
       health_routes
 

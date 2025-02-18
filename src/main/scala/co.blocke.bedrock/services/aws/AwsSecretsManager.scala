@@ -60,13 +60,16 @@ final case class LiveAwsSecretsManager(authConfig: AuthConfig, awsEnv: AwsEnviro
             // There may or may not be a previous version.
             val curSessionVersion = getVersion(authConfig.sessionSecretName, "AWSCURRENT")
               .getOrElse(throw new Exception("No current version found for session secret")) // There must be a current version!
+            val prevSessionVersion = getVersion(authConfig.sessionSecretName, "AWSPREVIOUS")
+            // There may or may not be a previous version.
 
-            // Retreive the secret keys
+            // Retrieve the secret keys
             val curTokenSecretKey = getSecret(authConfig.tokenSecretName, curTokenVersion)
             val prevTokenSecretKey = prevTokenVersion.map( getSecret(authConfig.tokenSecretName, _) )
-            val sesssionSecretKey = getSecret(authConfig.sessionSecretName, curSessionVersion)
+            val sessionSecretKey = getSecret(authConfig.sessionSecretName, curSessionVersion)
+            val prevSessionSecretKey = prevSessionVersion.map( getSecret(authConfig.sessionSecretName, _) )
 
-            KeyBundle(curTokenSecretKey, prevTokenSecretKey, sesssionSecretKey)
+            KeyBundle(curTokenSecretKey, prevTokenSecretKey, sessionSecretKey, prevSessionSecretKey)
           } finally {
               secretsClient.close()
           }

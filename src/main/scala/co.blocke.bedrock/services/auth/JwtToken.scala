@@ -6,6 +6,7 @@ import pdi.jwt.*
 import zio.*
 import zio.json.*
 import zio.json.ast.Json
+import aws.KeyBundle
 
 
 case class JwtPayload(
@@ -39,32 +40,37 @@ object JwtToken:
   // Ok, so the JWT library we're using is a bit of a mess.  It encodes subjects consistently, but
   // upon decode it sometimes puts the subject in the "sub" field and sometimes in the "content" field.
   // No clear reason why--so we have to accomodate either and force standardization.
-  private def fixClaim(claim: JwtClaim): ZIO[Any, TokenError, JwtClaim] = {
+  private def fixClaim(claim: JwtClaim): ZIO[Any, TokenError, JwtClaim] =
     ZIO.fromOption(claim.subject)
-        .orElse {
-        ZIO
-            .fromEither(claim.content.fromJson[JwtPayload])
-            .mapError(_ => TokenError.BadPayload)
-            .flatMap(payload =>
+      .orElse {
+        ZIO.fromEither(claim.content.fromJson[JwtPayload])
+          .mapError(_ => TokenError.BadPayload)
+          .flatMap(payload =>
             payload.sub match {
-                case Some(subject) => ZIO.succeed(subject)
-                case None          => ZIO.fail(TokenError.NoSubject)
+              case Some(subject) => ZIO.succeed(subject)
+              case None          => ZIO.fail(TokenError.NoSubject)
             }
-            )
+          )
+      }
+      .map { subject =>
+        // Parse existing content to remove the duplicate "sub" field
+        val updatedContent = claim.content.fromJson[JwtPayload] match {
+          case Right(payload) =>
+            payload.copy(sub = Some(subject)).toJson // Ensure the new "sub" is properly set
+          case Left(_) => claim.content // Keep original if parsing fails
         }
-        .map(subject =>
+
         JwtClaim(
-            content = claim.content,
-            issuer = claim.issuer,
-            subject = Some(subject), // Now there will always be a subject here
-            audience = claim.audience,
-            expiration = claim.expiration,
-            notBefore = claim.notBefore,
-            issuedAt = claim.issuedAt,
-            jwtId = claim.jwtId
+          content = updatedContent,  // Use the cleaned-up content
+          issuer = claim.issuer,
+          subject = Some(subject),    // Ensure "sub" is set in JwtClaim
+          audience = claim.audience,
+          expiration = claim.expiration,
+          notBefore = claim.notBefore,
+          issuedAt = claim.issuedAt,
+          jwtId = claim.jwtId
         )
-      )
-    }
+      }
 
   private[auth] def jwtEncode(
     subject: String, 
@@ -121,47 +127,28 @@ object JwtToken:
   private[auth] def refreshAccessToken(
      oldAccessToken: String,
      refreshToken: String,
-     accessTokenKey: String,
-     prevAccessTokenKey: Option[String],
+     keyBundle: KeyBundle,
      leewaySec: Long,  // should be session TTL to be safe (if older than session we're dead anyway)
-     refreshTokenKey: String,
      accessExpirationSec: Long
    )(implicit clock: zio.Clock): ZIO[Any, TokenError, String] =
     for {
       // Ensure refresh token is good
-      _ <- jwtDecode(refreshToken, refreshTokenKey)
+      _ <- jwtDecode(refreshToken, keyBundle.sessionKey.value)
+        .catchSome{
+          // If session key has rotated, try previous one. If that fails--it's bad
+          case _ if keyBundle.previousSessionKey.isDefined => jwtDecode(refreshToken, keyBundle.previousSessionKey.get.value)
+        }
 
       // Get the access token's claim, accounting for possible secret key rotation
-      accessClaim <- jwtDecode(oldAccessToken, accessTokenKey, leewaySec).catchSome{
-        case TokenError.BadSignature if prevAccessTokenKey.isDefined => jwtDecode(oldAccessToken, prevAccessTokenKey.get, leewaySec) // try with previous key or fail
+      accessClaim <- jwtDecode(oldAccessToken, keyBundle.currentTokenKey.value, leewaySec).catchSome{
+        case TokenError.BadSignature if keyBundle.previousTokenKey.isDefined => jwtDecode(oldAccessToken, keyBundle.previousTokenKey.get.value, leewaySec) // try with previous key or fail
       }
 
       // Encode a new access token, maintaining other info, eg roles
-      newAccessToken <- jwtEncode(accessClaim, accessTokenKey, accessExpirationSec)
+      newAccessToken <- jwtEncode(accessClaim, keyBundle.currentTokenKey.value, accessExpirationSec)
         .mapError(_ => TokenError.OtherProblem)
     } yield newAccessToken
 
-//
-//  private[auth] def refreshToken(
-//    token: String,
-//    decodeWith: String,
-//    encodeNewKey: String,
-//    leewaySec: Long,
-//    expirationSec: Long
-//  )(implicit clock: zio.Clock): ZIO[Any, TokenError, (JwtClaim, String)] =
-//    for {
-//      now <- clock.instant
-//      // Decode the token allowing for extra time (refresh_window_sec from config) to see if it is still in the
-//      // refresh window
-//      sloppyClaim <- jwtDecode(token, decodeWith, leewaySec)
-//      newToken <- sloppyClaim.subject match {
-//        case None => ZIO.fail(TokenError.NoSubject)
-//        case _ =>
-//          // Re-encode the token with a new expiration time
-//          jwtEncode(sloppyClaim, encodeNewKey, expirationSec)
-//            .mapError(_ => TokenError.OtherProblem)
-//      }
-//    } yield (sloppyClaim, newToken)
 
   private[auth] def getRoles(claim: JwtClaim, roleFieldName: Option[String] = None): ZIO[Any, TokenError, List[String]] = {
     // Define the possible keys that can represent "roles"

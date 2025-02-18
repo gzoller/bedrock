@@ -20,11 +20,8 @@ trait OAuth2:
 
 /* 
 Endpoints: 
-    /login      (Bedrock Auth)
-    /login      (OpenID)
-    /login      (Session auth--returning user)
-    /callback   (OpenID)
-    /userinfo   (OpenID)  (use server-generated session token to retrieve user info)
+    /login_proxy  (OpenID)
+    /callback     (OpenID)
  */
   
 final case class LiveOAuth2(
@@ -45,18 +42,21 @@ final case class LiveOAuth2(
     * It redirects to the OAuth2 provider. The purpose of this proxy is to hide knowledge of tokens, etc., from
     * the client.
     */
-  private val loginProxyEndpoint_O: Endpoint[Unit, (String,String), ZNothing, String, AuthType.None] = Endpoint(RoutePattern.GET / "api" / "login_proxy")
+  private val loginProxyEndpoint: Endpoint[Unit, (String,String), ZNothing, String, AuthType.None] = Endpoint(RoutePattern.GET / "api" / "login_proxy")
     .query(HttpCodec.query[String]("redirect_location"))
     .query(HttpCodec.query[String]("state"))
     .out[String](MediaType.text.plain)
 
-  private val loginProxyHandler_O: Handler[Any, Nothing, (String,String), String] =
+  private val loginProxyHandler: Handler[Any, Nothing, (String,String), String] =
     Handler.fromFunctionZIO { (redirectLocation: String, nonce: String) =>
       val stateId = UUIDutil.base64Id
       val jsEncodedState = State(stateId, authConfig.tenantPrefix, nonce, redirectLocation).toEncodedJson
       for {
         // Set the state in Redis for only 5 min--just long enough to get the callback from the provider
         _ <- redis.set(stateId, jsEncodedState, Some(5.minutes))
+          .catchAll{ err =>
+            ZIO.logError("Error while attempting to set value in Redis: "+err.getMessage).as(500)
+          }
       } yield s"${authConfig.oauthConfig.authUrl}?" +
               s"client_id=${encode(clientId)}&" + 
               s"redirect_uri=${encode(authConfig.callbackBaseUrl + "/api/oauth2/callback")}&" +
@@ -67,30 +67,7 @@ final case class LiveOAuth2(
               // NOTE: For Auth0/Okta, add offline_access to scope to trigger return of refresh token
       }
 
-  private val loginProxyRoute_O = Routes(loginProxyEndpoint_O.implementHandler(loginProxyHandler_O)) @@ HTTPutil.redirectAspect
-
-
-  // [==== /login Endpoint (Session -- Returning login) ====]
-
-  /*
-  val loginProxyEndpoint_S: Endpoint[Unit, String, ZNothing, String, AuthType.None] = Endpoint(RoutePattern.GET / "login_proxy")
-    .query(HttpCodec.query[String]("sessionId"))
-    .out[String](MediaType.text.plain)
-
-  val loginProxyHandler_S: Handler[Any, Nothing, String, String] = handler { (sessionId: String) =>
-    val session = FakeSessionCache.get(sessionId)
-    "foo"
-    // s"${oauthConfig.authUrl}?" +
-    // s"client_id=${encode(clientId)}&" + 
-    // "access_type=offline&" +
-    // s"redirect_uri=${encode(callbackBaseUrl + "/oauth2/callback")}&" +
-    // "response_type=code&" +
-    // s"""scope=${encode(oauthConfig.scopes.mkString(" "))}&""" +
-    // s"state=${encode(rawEncodedState)}"
-  }
-
-  val loginProxyRoute_S = Routes(loginProxyEndpoint_S.implementHandler(loginProxyHandler_S)) @@ redirectAspect
-  */
+  private val loginProxyRoute = Routes(loginProxyEndpoint.implementHandler(loginProxyHandler)) @@ HTTPutil.redirectAspect
 
 
   // [==== /callback Endpoint ====] (used for non-Bedrock OAuth providers)
@@ -126,9 +103,9 @@ final case class LiveOAuth2(
 
         // TODO: Query some DB to get user's roles for the tokens
 
-        sessionId   <- auth.issueSessionToken(userProfile.userId, List.empty[String])
         brAccessToken <- auth.issueAccessToken(userProfile.userId, List("user"))
         brRefreshToken <- auth.issueSessionToken(userProfile.userId, List("user"))
+        sessionId <- auth.issueSessionToken(userProfile.userId, List.empty) // different from brRefreshToken for security
 
         // For each session we cache 2 things:
         // 1. userId -> Session, lifespan: max session lifespan
@@ -179,7 +156,7 @@ final case class LiveOAuth2(
       Response.text("Unexpected Error").status(Status.InternalServerError)
   }
 
-  val routes: Routes[Any, Response] = loginProxyRoute_O ++ callbackRoute
+  val routes: Routes[Any, Response] = loginProxyRoute ++ callbackRoute
 
 
 object OAuth2:

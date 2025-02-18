@@ -55,6 +55,7 @@ services:
       - LOCALSTACK_URL=http://localstack:4566
       - SERVER_CERT_PATH=/certs/server.crt
       - SERVER_KEY_PATH=/certs/server.key
+      - AWS_ENV=localstack
     healthcheck:
       test: ["CMD", "curl", "-fk", "https://bedrock:8073/health"]
       interval: 5s

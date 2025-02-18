@@ -19,6 +19,7 @@ lazy val root = (project in file("."))
     // Global / excludeLintKeys += buildInfoKeys, // Suppress annoying lint message about unused keys
     // Global / excludeLintKeys += buildInfoPackage, 
 
+    Compile / resourceDirectory := baseDirectory.value / "src" / "main" / "resources",
 
     ThisBuild / scalacOptions ++= Seq(
       "-Wunused:imports", // Warn on unused imports
@@ -38,9 +39,10 @@ lazy val root = (project in file("."))
       // ---- AWS
       "software.amazon.awssdk" % "core" % "2.20.0",            // AWS SDK Core
       "software.amazon.awssdk" % "secretsmanager" % "2.20.0",  // Secrets Manager SDK
-      "software.amazon.awssdk" % "sns" % "2.20.0",  // Secrets Manager SDK
+      "software.amazon.awssdk" % "sns" % "2.20.0",             // Secrets Manager SDK
 
       // ---- Misc
+      "io.lettuce" % "lettuce-core" % "6.5.3.RELEASE",
       "com.fasterxml.uuid" % "java-uuid-generator" % "5.1.0",  // Generate UUIDv7 (time-sensitive UUIDs)
       "org.scala-lang.modules" %% "scala-xml" % "2.3.0",
       "ch.qos.logback" % "logback-classic" % "1.4.6",

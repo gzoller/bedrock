@@ -18,7 +18,7 @@ object Main extends ZIOAppDefault {
     certPath = sys.env.getOrElse("SERVER_CERT_PATH",""), // crash if you can't find these
     keyPath = sys.env.getOrElse("SERVER_KEY_PATH","")
   )
-  val secureServerConfig: Server.Config => zio.http.Server.Config = 
+  val secureServerConfig: Server.Config => zio.http.Server.Config =
     (config: Server.Config) => config.port(8073).ssl(sslConfig)
 
   val serverLayer: ZLayer[Any, Nothing, Server] = Server.defaultWith(secureServerConfig).orDie

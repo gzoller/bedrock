@@ -18,9 +18,10 @@ import java.time.Duration
 
 trait Authentication:
 //  def login(username: String, password: String): ZIO[Any, Either[GeneralFailure, BadCredentialError], TokenBundle] // returns a token
-  def bedrockProtected(roles: List[String] = List.empty[String]): HandlerAspect[Any, Session]
+  def bedrockProtected(roles: List[String] = List.empty[String]): HandlerAspect[Any, String]
   def updateKeys(): ZIO[Any, Throwable, Unit]
   def getKeyBundleVersion: UIO[Int]
+  def getSession(userId: String): ZIO[Any, AuthError, Session]
 
   def issueExpiredToken(expiredBySec: Long, subject: String, isSession: Boolean): ZIO[Any, Throwable, String]  // used only for integration testing
   def issueAccessToken(userId: String, roles: List[String]): ZIO[Any, Throwable, String]
@@ -75,104 +76,81 @@ final case class LiveAuthentication(
       keyBundle = keyBundleLive
     }
 
-  /**
-    * Login function to authenticate a user and return a a TokenBundle containing:
-    *  - current auth token
-    *  - a session token (used to refresh auth tokens, which expire frequently)
-    *
-    * The idea here is we hit a database or something to validate the credentials. Only 3 possible outcomes are allowed:
-    *  1. successful -- credentials are good, in which case we return a TokenBundle
-    *  2. bad creds  -- Return a Right[BadCredentialError]
-    *  3. anything else at all -- Return a Left[GeneralFailure] (log the real error of course, but just return GeneralFailure)
-    */
-  /*
-  def login(username: String, password: String): ZIO[Any, Either[GeneralFailure, BadCredentialError], TokenBundle] =
+
+  def getSession(userId: String): ZIO[Any, AuthError, Session] =
     for {
-      sessionToken <- JwtToken.jwtEncode(username, keyBundle.sessionKey.value, authConfig.sessionDurationSec, List.empty[String])
-        .mapError { throwable =>
-          val errorMessage = s"Failed to generate session JWT for user $username: ${throwable.getMessage}"
-          GeneralFailure(errorMessage)
-        }
-        .tapError(error => ZIO.logError(error.message))
-        .mapError(Left(_)) // Wrap the error as a `Left` to match the return type
+      // Marshal Session object from cache
+      sessionJS <- redis.get(userId)
+        .mapError(e => GeneralFailure(s"Failed to retrieve session from Redis: ${e.getMessage}"))
+        .someOrFail(SessionExpired("Session expired"))
+      session <- ZIO.fromEither(sessionJS.fromJson[Session])
+        .mapError(e => GeneralFailure(s"Cannot parse session JSON: $e"))
+    } yield session
 
-      // Hardwired here--in real live pull thse out of a db, IAM, or something
-      roles = username match {
-        case "AdminUser" => List("admin") 
-        case "TestUser" => List("test") 
-        case _ => List.empty[String]
-      }
-      authToken <- JwtToken.jwtEncode(username, keyBundle.currentTokenKey.value, authConfig.tokenExpirationSec, roles)
-        .mapError { throwable =>
-          val errorMessage = s"Failed to generate auth JWT for user $username: ${throwable.getMessage}"
-          GeneralFailure(errorMessage)
-        }
-        .tapError(error => ZIO.logError(error.message))
-        .mapError(Left(_)) // Wrap the error as a `Left` to match the return type
-    } yield TokenBundle(sessionToken, authToken)
-  */
 
-  /**
-   * Mix this into your endpoint (@@) to protect it with JWT tokens.  The endpoint will be protected by the roles. 
-   */
-  private def resolveToken(sessionId: String): ZIO[Any,AuthError,(String, Session)] =
+  private def resolveToken(sessionId: String): ZIO[Any,AuthError, (String, String, List[String])] =
     for {
       // Ensure session has not expired
-      userId <- JwtToken.jwtDecode(sessionId, keyBundle.sessionKey.value)
+      sessionClaim <- JwtToken.jwtDecode(sessionId, keyBundle.sessionKey.value)
         .mapError {
           case JwtToken.TokenError.Expired => SessionExpired("Session expired")
           case _ => GeneralFailure("Non-expiration session error (couldn't decode session token)")
         }
-        .map(_.subject) // userId is Option[String]
-        .someOrFail(GeneralFailure("Bad session id token")) // Fail if None
-
-      // Marshal Session object from cache
-      sessionJS <- redis.get(userId)
-        .someOrFail(SessionExpired("Session expired"))
-      session <- ZIO.fromEither(sessionJS.fromJson[Session])
-        .mapError(e => GeneralFailure(s"Cannot parse session js: $e"))
+      userId <- ZIO.fromOption(sessionClaim.subject)
+        .orElseFail(GeneralFailure("Bad session id token"))
+      roles <- JwtToken.getRoles(sessionClaim)
+        .mapError {
+          case JwtToken.TokenError.Expired => SessionExpired("Session expired")
+          case _ => GeneralFailure("Non-expiration session error (couldn't decode session token)")
+        }
 
       // Ensure sessionId->access_token mapping is still in cache (if not, period of inactivity has invalidated session)
       accessToken <- redis.getDel(sessionId)
-                       .someOrFail(SessionExpired("Session inactive and expired"))
-      _ <- ZIO.succeed(println("--1-- Access token: "+accessToken))
+        .mapError(e => GeneralFailure(s"Failed to get value from redis: ${e.getMessage}"))
+        .someOrFail(SessionExpired("Session inactive and expired"))
 
       // Determine if accessToken has expired, and if so, refresh it
       refreshedToken <- JwtToken.jwtDecode(accessToken, keyBundle.currentTokenKey.value)
         .map( _ => accessToken ) // decode worked--keep original token
-        .catchAll{
-          _ => JwtToken.refreshAccessToken(
-            accessToken,
-            session.oauthTokens.bedrockRefreshToken,
-            keyBundle.currentTokenKey.value,
-            keyBundle.previousTokenKey.map(_.value),
-            authConfig.sessionLifespanSec,
-            keyBundle.sessionKey.value,
-            authConfig.tokenExpirationSec
-          ).mapError( _ => GeneralFailure("Unable to refresh access token using refresh token") )
+        .catchAll{ _ =>
+          for {
+            // Marshal Session object from cache
+            session <- getSession(userId)
+
+            // Attempt to refresh token using session data
+            newToken <- JwtToken.refreshAccessToken(
+              accessToken,
+              session.oauthTokens.bedrockRefreshToken,
+              keyBundle,
+              authConfig.sessionLifespanSec,
+              authConfig.tokenExpirationSec
+            ).mapError(_ => GeneralFailure("Unable to refresh access token using refresh token"))
+          } yield newToken
         }
-      _ <- ZIO.succeed(println("--2-- New access token: "+refreshedToken))
+//      _ <- ZIO.succeed(println(s">>> Orig token: $accessToken"))
+//      _ <- ZIO.succeed(println(s">>>  New token: $refreshedToken"))
 
       // Restore sessionId->access_token mapping
       _ <- redis.set(sessionId, refreshedToken, Some(Duration.ofSeconds(authConfig.sessionInactivitySec)))
-    } yield (refreshedToken, session)
+             .mapError(e => GeneralFailure(s"Failed to set value in redis: ${e.getMessage}"))
+    } yield (refreshedToken, userId, roles)
 
   /**
    * Mix this into your endpoint (@@) to protect it with JWT tokens.  The endpoint will be protected by the roles. 
    * This aspect looks up the session and adds the Bedrock access token into the request context.
    */
-  def bedrockProtected(endpointRoles: List[String]): HandlerAspect[Any, Session] =
+  def bedrockProtected(endpointRoles: List[String]): HandlerAspect[Any, String] =
     HandlerAspect.interceptIncomingHandler {
       Handler.fromFunctionZIO[Request] { request =>
         request.header(Header.Authorization) match {
           case Some(Header.Authorization.Bearer(sessionId)) =>
             (for {
-              (resolvedToken, session) <- resolveToken(sessionId.value.asString)
+              (resolvedToken, userId, roles) <- resolveToken(sessionId.value.asString)
               // check role permissions
-              _ <- if endpointRoles.isEmpty || session.roles.exists(endpointRoles.contains) then
+              _ <- if endpointRoles.isEmpty || roles.exists(endpointRoles.contains) then
                 ZIO.succeed(()) else ZIO.fail(BadCredentialError("role mismatch"))
               newRequest = if (resolvedToken != sessionId.value.asString) request.addHeader(Header.Authorization.Bearer(resolvedToken)) else request
-            } yield (newRequest, session))
+            } yield (newRequest, userId))
               .tapError {
                 case e: GeneralFailure => ZIO.logError(e.message)
                 case _ => ZIO.unit

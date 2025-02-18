@@ -8,6 +8,11 @@ output "private_subnet_ids" {
   value       = aws_subnet.private[*].id
 }
 
+output "public_subnet_ids" {
+  description = "List of public subnet IDs"
+  value       = aws_subnet.public[*].id
+}
+
 output "vpc_cidr" {
   description = "CIDR block for the VPC"
   value       = var.vpc_cidr

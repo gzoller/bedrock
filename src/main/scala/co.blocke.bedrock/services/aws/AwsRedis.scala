@@ -3,8 +3,10 @@ package services
 package aws
 
 import zio.*
-import java.time.Duration
 import java.util.concurrent.TimeUnit
+import io.lettuce.core._
+import io.lettuce.core.api.StatefulRedisConnection
+import io.lettuce.core.api.async.RedisAsyncCommands
 
 // A helper case class to store both the value and its optional expiration time.
 private case class CacheEntry(value: String, expireAt: Option[Long])
@@ -14,11 +16,11 @@ trait AwsRedis:
     key: String,
     value: String,
     expireTime: Option[Duration] = None
-  ): ZIO[Any, Nothing, Unit]
-  def get(key: String): ZIO[Any, Nothing, Option[String]]
-  def getDel(key: String): ZIO[Any, Nothing, Option[String]]
+  ): ZIO[Any, Throwable, Unit]
+  def get(key: String): ZIO[Any, Throwable, Option[String]]
+  def getDel(key: String): ZIO[Any, Throwable, Option[String]]
 
-final case class LiveAwsRedis() extends AwsRedis:
+final case class FakeAwsRedis() extends AwsRedis:
   // The cache now holds CacheEntry values.
   private val cache = scala.collection.mutable.Map[String, CacheEntry]()
 
@@ -74,5 +76,65 @@ final case class LiveAwsRedis() extends AwsRedis:
       }
     } yield result
 
-object AwsRedis:
-  def live: ZLayer[Any, Nothing, AwsRedis] = ZLayer.succeed(LiveAwsRedis())
+
+final case class LiveAwsRedis(
+                               client: RedisClient,
+                               connection: StatefulRedisConnection[String, String],
+                               asyncCommands: RedisAsyncCommands[String, String]
+                             ) extends AwsRedis {
+
+  override def set(
+                    key: String,
+                    value: String,
+                    expireTime: Option[Duration] = None
+                  ): ZIO[Any, Throwable, Unit] =
+    ZIO.fromCompletableFuture(
+      expireTime match {
+        case Some(duration) => asyncCommands.setex(key, duration.toSeconds, value).toCompletableFuture
+        case None           => asyncCommands.set(key, value).toCompletableFuture
+      }
+    ).unit.tapError(err => ZIO.logError(s"Redis set failed: ${err.getMessage}"))
+
+  override def get(key: String): ZIO[Any, Throwable, Option[String]] =
+    ZIO.fromCompletableFuture(asyncCommands.get(key).toCompletableFuture)
+      .map(Option(_))
+      .tapError(err => ZIO.logError(s"Redis get failed: ${err.getMessage}"))
+
+  override def getDel(key: String): ZIO[Any, Throwable, Option[String]] =
+    ZIO.fromCompletableFuture(asyncCommands.get(key).toCompletableFuture)
+      .map(Option(_))
+      .tapError(err => ZIO.logError(s"Redis getDel failed: ${err.getMessage}"))
+}
+
+
+object AwsRedis {
+  def live: ZLayer[AWSConfig, Throwable, AwsRedis] =
+    ZLayer.scoped {
+      for {
+        awsConfig <- ZIO.service[AWSConfig]
+        _         <- ZIO.logInfo(s"Initializing Redis client... (is live AWS = ${awsConfig.liveAws})")
+
+        redisInstance <- if (!awsConfig.liveAws) {
+          ZIO.succeed(FakeAwsRedis()) // Use fake implementation for localstack
+        } else {
+          for {
+            redisUri   <- ZIO.fromOption(awsConfig.redisUri)
+              .orElseFail(new RuntimeException("Redis URI not set"))
+            client     <- ZIO.attempt(RedisClient.create(redisUri))
+            connection <- ZIO.attempt(client.connect())
+            asyncCmds  <- ZIO.attempt(connection.async())
+
+            _ <- ZIO.addFinalizer(
+              ZIO.succeed {
+                connection.close()
+                client.shutdown()
+              }
+            )
+
+            _ <- ZIO.logInfo("Redis client successfully initialized")
+          } yield LiveAwsRedis(client, connection, asyncCmds)
+        }
+      } yield redisInstance
+    }
+}
+

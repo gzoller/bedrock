@@ -50,4 +50,4 @@ object SnsArn:
 
 case class Key(version: String, value: String, instantCreated: Instant)
 
-case class KeyBundle( currentTokenKey: Key, previousTokenKey: Option[Key], sessionKey: Key )
+case class KeyBundle( currentTokenKey: Key, previousTokenKey: Option[Key], sessionKey: Key, previousSessionKey: Option[Key] )

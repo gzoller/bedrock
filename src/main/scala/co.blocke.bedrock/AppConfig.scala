@@ -34,13 +34,16 @@ case class AWSConfig(
     snsSecretRotationTopicName: String,
     regionUrl: URL,
     ipRangesUrl: URL,
+    redisUri: Option[String],
     localstackUrl: Option[String],  // this is a string b/c ultimately its parsed into a URI
     snsSubscribeBaseUrl: String
 )
 
 object AppConfig:
   private def readAppConfig: ZIO[Any, Throwable, String] = for {
-    stream <- ZIO.attempt(Option(getClass.getClassLoader.getResourceAsStream("application.conf")))
+    awsEnv <- ZIO.attempt(sys.env.getOrElse("AWS_ENV", "aws")) // Default to AWS if unset
+    configFile = s"application-$awsEnv.conf"
+    stream <- ZIO.attempt(Option(getClass.getClassLoader.getResourceAsStream(configFile)))
     content <- stream match {
       case Some(inputStream) =>
         val content = new String(inputStream.readAllBytes(), java.nio.charset.StandardCharsets.UTF_8)

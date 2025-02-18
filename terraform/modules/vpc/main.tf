@@ -1,5 +1,5 @@
 resource "aws_vpc" "this" {
-  cidr_block = var.vpc_cidr
+  cidr_block           = var.vpc_cidr
   enable_dns_support   = true
   enable_dns_hostnames = true
   tags = {
@@ -7,6 +7,29 @@ resource "aws_vpc" "this" {
   }
 }
 
+# Create an Internet Gateway for Public Subnets
+resource "aws_internet_gateway" "this" {
+  vpc_id = aws_vpc.this.id
+
+  tags = {
+    Name = "${var.vpc_name}-igw"
+  }
+}
+
+# Create Elastic IP for NAT Gateway (allows private subnets to reach the internet)
+resource "aws_eip" "nat" {
+  tags = {
+    Name = "bedrock-nat-gateway"
+  }
+}
+
+# Create a NAT Gateway for Private Subnets
+resource "aws_nat_gateway" "this" {
+  allocation_id = aws_eip.nat.id
+  subnet_id     = aws_subnet.public[0].id  # Attach to first public subnet
+}
+
+# Public Subnets (Multi-AZ)
 resource "aws_subnet" "public" {
   count = length(var.public_subnet_cidrs)
 
@@ -16,10 +39,12 @@ resource "aws_subnet" "public" {
   availability_zone       = element(var.availability_zones, count.index)
 
   tags = {
-    Name = "public-subnet-${count.index}"
+    Name                             = "public-subnet-${count.index}"
+    "kubernetes.io/role/elb"         = "1"   # Tagging for Load Balancer
   }
 }
 
+# Private Subnets (Multi-AZ, for EKS & ElastiCache)
 resource "aws_subnet" "private" {
   count = length(var.private_subnet_cidrs)
 
@@ -28,21 +53,14 @@ resource "aws_subnet" "private" {
   availability_zone = element(var.availability_zones, count.index)
 
   tags = {
-    Name = "private-subnet-${count.index}"
+    Name                                     = "private-subnet-${count.index}"
+    "kubernetes.io/role/internal-elb"        = "1"
+    "kubernetes.io/cluster/bedrock-cluster"  = "shared"
+    "aws:elasticache:subnet-group"           = "true"   # Tag for Redis Subnet Group
   }
 }
 
-resource "aws_internet_gateway" "this" {
-  vpc_id = aws_vpc.this.id
-
-  tags = {
-    Name = "${var.vpc_name}-igw"
-  }
-}
-
-#
-# Public route table
-#
+# Public Route Table
 resource "aws_route_table" "public" {
   vpc_id = aws_vpc.this.id
 
@@ -59,11 +77,14 @@ resource "aws_route_table_association" "public_assoc" {
   route_table_id = aws_route_table.public.id
 }
 
-#
-# Private route table
-#
+# Private Route Table (For Private Subnets, with NAT Gateway)
 resource "aws_route_table" "private" {
   vpc_id = aws_vpc.this.id
+
+  route {
+    cidr_block = "0.0.0.0/0"
+    nat_gateway_id = aws_nat_gateway.this.id
+  }
 
   tags = {
     Name = "${var.vpc_name}-private-route-table"
@@ -77,9 +98,7 @@ resource "aws_route_table_association" "private_assoc" {
   route_table_id = aws_route_table.private.id
 }
 
-#
-# Create Role used to access resources in this VPC
-#
+# IAM Role for Resources
 resource "aws_iam_role" "vpc_role" {
   name = "${var.vpc_name}-role"
   assume_role_policy = jsonencode({
