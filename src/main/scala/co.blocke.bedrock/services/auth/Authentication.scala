@@ -87,7 +87,6 @@ final case class LiveAuthentication(
         .mapError(e => GeneralFailure(s"Cannot parse session JSON: $e"))
     } yield session
 
-
   private def resolveToken(sessionId: String): ZIO[Any,AuthError, (String, String, List[String])] =
     for {
       // Ensure session has not expired
@@ -122,8 +121,8 @@ final case class LiveAuthentication(
               accessToken,
               session.oauthTokens.bedrockRefreshToken,
               keyBundle,
-              authConfig.sessionLifespanSec,
-              authConfig.tokenExpirationSec
+              authConfig.tokenExpirationSec,
+              authConfig.sessionLifespanSec
             ).mapError(_ => GeneralFailure("Unable to refresh access token using refresh token"))
           } yield newToken
         }

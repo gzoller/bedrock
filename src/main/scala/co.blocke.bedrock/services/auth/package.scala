@@ -47,6 +47,13 @@ object TokenBundle:
   implicit val codec: JsonCodec[TokenBundle] = DeriveJsonCodec.gen[TokenBundle]
 
 //-------------------
+// Session Descriptor
+case class SessionDesc(sessionId: String, sessionLifespanSec: Long, sessionInactivitySec: Long)
+object SessionDesc:
+  implicit val schema: Schema[SessionDesc] = DeriveSchema.gen[SessionDesc]
+  implicit val codec: JsonCodec[SessionDesc] = DeriveJsonCodec.gen[SessionDesc]
+
+//-------------------
 // Provider OAuth Tokens
 case class ProviderOAuthTokens(
   access_token: String,

@@ -41,6 +41,7 @@ trait Validator:
   // Provider-specific parameters for the code->tokens exchange
   val tokenQueryExtraFields: String = ""
 
+  def verifyAccessToken(accessToken: String): ZIO[Any, Throwable, Unit]
   def verifyIdToken(idToken: String): ZIO[Any, Throwable, UserProfile]
 
   def validateParams(params: Map[String, String], requiredScope: List[String], redis: AwsRedis): ZIO[Any, Throwable, State] =

@@ -128,10 +128,12 @@ object JwtToken:
      oldAccessToken: String,
      refreshToken: String,
      keyBundle: KeyBundle,
+     accessExpirationSec: Long,
      leewaySec: Long,  // should be session TTL to be safe (if older than session we're dead anyway)
-     accessExpirationSec: Long
    )(implicit clock: zio.Clock): ZIO[Any, TokenError, String] =
     for {
+      currentTime <- Clock.currentTime(java.util.concurrent.TimeUnit.SECONDS)
+
       // Ensure refresh token is good
       _ <- jwtDecode(refreshToken, keyBundle.sessionKey.value)
         .catchSome{
@@ -141,7 +143,7 @@ object JwtToken:
 
       // Get the access token's claim, accounting for possible secret key rotation
       accessClaim <- jwtDecode(oldAccessToken, keyBundle.currentTokenKey.value, leewaySec).catchSome{
-        case TokenError.BadSignature if keyBundle.previousTokenKey.isDefined => jwtDecode(oldAccessToken, keyBundle.previousTokenKey.get.value, leewaySec) // try with previous key or fail
+        case TokenError.BadSignature if keyBundle.previousTokenKey.isDefined => jwtDecode(oldAccessToken, keyBundle.previousTokenKey.get.value) // try with previous key or fail
       }
 
       // Encode a new access token, maintaining other info, eg roles

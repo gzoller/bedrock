@@ -10,6 +10,7 @@ import zio.json.*
 import zio.http.{Client, Request}
 import java.security.spec.RSAPublicKeySpec
 import java.security.{KeyFactory, PublicKey}
+import java.util.concurrent.TimeUnit
 
 
 /*
@@ -50,9 +51,13 @@ final case class GoogleValidator(rsaKeys : List[GooglePublicKey]) extends Valida
     KeyFactory.getInstance("RSA").generatePublic(spec)
   }
 
-  def verifyIdToken(idToken: String): ZIO[Any, Throwable, UserProfile] =
+  private def verifyTokenWithRsa(token: String): ZIO[Any, Throwable, (JwtHeader, JwtClaim, String)] =
     for {
-      decoded <- ZIO.fromTry(Jwt.decodeAll(idToken, JwtOptions(signature = false)))
+      decoded <- ZIO.fromTry(Jwt.decodeAll(token, JwtOptions(signature = false)))
+      (_, claims, _) = decoded // Extract claims from tuple
+      expOpt = claims.expiration // Option[Long] - UNIX timestamp (seconds)
+      now <- Clock.currentTime(TimeUnit.SECONDS) // Current UNIX time
+      _ <- ZIO.fail(new RuntimeException("Token expired")).when(expOpt.exists(_ < now))
       kidOpt = decoded._1.keyId
 
       // 🔹 Select the correct public key (or try all if `kid` is missing)
@@ -62,20 +67,25 @@ final case class GoogleValidator(rsaKeys : List[GooglePublicKey]) extends Valida
       }
 
       // 🔹 Validate JWT against available keys
-      verified <- ZIO.succeed {
+      _ <- ZIO.succeed {
         selectedKeys.exists { key =>
           val publicKey = createPublicKey(key.n, key.e)
-          Jwt.isValid(idToken, publicKey, Seq(JwtAlgorithm.RS256))
+          Jwt.isValid(token, publicKey, Seq(JwtAlgorithm.RS256))
         }
       }.filterOrFail(identity)(new RuntimeException("JWT verification failed"))
+    } yield decoded
 
-      // 🔹 Parse the UserProfile from the JWT claims
+  def verifyAccessToken(idToken: String): ZIO[Any, Throwable, Unit] =
+    verifyTokenWithRsa(idToken).map(_ => ())
+
+  def verifyIdToken(idToken: String): ZIO[Any, Throwable, UserProfile] =
+    for {
+      decoded <- verifyTokenWithRsa(idToken)
+      // Parse the UserProfile from the JWT claims
       rawProfile <- ZIO.fromEither(decoded._2.content.fromJson[UserProfile].left.map(err =>
         new RuntimeException(s"JSON Parsing Error: $err")
       ))
-
       claimSubject <- ZIO.fromOption(decoded._2.subject).orElseFail(new RuntimeException("No subject in token"))
-
     } yield rawProfile.copy(userId = claimSubject)
 
 

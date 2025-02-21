@@ -69,15 +69,15 @@
         const redirectLocation = encodeURIComponent(basePath + "home.html");
         const state = generateRandomString(16); // 16-character random string
 
-        const url = `https://localhost:8073/api/login_proxy?redirect_location=${redirectLocation}&state=${state}`;
+        const url = `https://localhost:8073/api/oauth2/login_proxy?redirect_location=${redirectLocation}&state=${state}`;
         window.location.href = url;
     }
 
     // ✅ Function to attempt login with existing sessionId
-    function trySessionLogin(sessionId) {
-        const url = `https://localhost:8073/api/login_proxy?sessionId=${sessionId}`;
-        window.location.href = url;
-    }
+    //function trySessionLogin(sessionId) {
+    //    const url = `https://localhost:8073/api/oauth2/login_proxy?sessionId=${sessionId}`;
+    //    window.location.href = url;
+    //}
 
     // ✅ Handle login errors (e.g., session expired)
     function checkForErrors() {
