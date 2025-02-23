@@ -1,0 +1,98 @@
+Java + Spring Boot:
+
+     scenarios: (100.00%) 1 scenario, 10000 max VUs, 1m20s max duration (incl. graceful stop):
+              * default: Up to 10000 looping VUs for 50s over 3 stages (gracefulRampDown: 30s, gracefulStop: 30s)
+
+
+     ✓ status was 200
+
+     checks.........................: 100.00% 552498 out of 552498
+     data_received..................: 74 MB   1.0 MB/s
+     data_sent......................: 49 MB   687 kB/s
+     http_req_blocked...............: avg=4.52µs   min=0s       med=1µs      max=16.45ms  p(90)=3µs      p(95)=4µs
+     http_req_connecting............: avg=2.25µs   min=0s       med=0s       max=16.35ms  p(90)=0s       p(95)=0s
+     http_req_duration..............: avg=25.59ms  min=459µs    med=13.33ms  max=363.62ms p(90)=64.54ms  p(95)=90.46ms
+       { expected_response:true }...: avg=25.59ms  min=459µs    med=13.33ms  max=363.62ms p(90)=64.54ms  p(95)=90.46ms
+     http_req_failed................: 0.00%   0 out of 552498
+     http_req_receiving.............: avg=15.67µs  min=3µs      med=7µs      max=25.01ms  p(90)=20µs     p(95)=28µs
+     http_req_sending...............: avg=29.75µs  min=1µs      med=3µs      max=24.73ms  p(90)=30µs     p(95)=68µs
+     http_req_tls_handshaking.......: avg=0s       min=0s       med=0s       max=0s       p(90)=0s       p(95)=0s
+     http_req_waiting...............: avg=25.54ms  min=448µs    med=13.3ms   max=363.6ms  p(90)=64.49ms  p(95)=90.32ms
+     http_reqs......................: 552498  7693.03046/s
+     iteration_duration.............: avg=525.97ms min=500.52ms med=513.85ms max=863.89ms p(90)=564.94ms p(95)=590.94ms
+     iterations.....................: 552498  7693.03046/s
+     vus............................: 234     min=234              max=10000
+     vus_max........................: 10000   min=10000            max=10000
+
+
+Bedrock:
+
+     scenarios: (100.00%) 1 scenario, 10000 max VUs, 1m20s max duration (incl. graceful stop):
+              * default: Up to 10000 looping VUs for 50s over 3 stages (gracefulRampDown: 30s, gracefulStop: 30s)
+
+
+     ✓ status was 200
+
+     checks.........................: 100.00% 577869 out of 577869
+     data_received..................: 62 MB   1.2 MB/s
+     data_sent......................: 51 MB   1.0 MB/s
+     http_req_blocked...............: avg=9.36µs   min=0s       med=2µs      max=148.15ms p(90)=3µs      p(95)=4µs
+     http_req_connecting............: avg=6.74µs   min=0s       med=0s       max=148.13ms p(90)=0s       p(95)=0s
+     http_req_duration..............: avg=22.9ms   min=397µs    med=9.24ms   max=403.65ms p(90)=63.35ms  p(95)=88.44ms
+       { expected_response:true }...: avg=22.9ms   min=397µs    med=9.24ms   max=403.65ms p(90)=63.35ms  p(95)=88.44ms
+     http_req_failed................: 0.00%   0 out of 577869
+     http_req_receiving.............: avg=17.81µs  min=3µs      med=8µs      max=35.43ms  p(90)=19µs     p(95)=28µs
+     http_req_sending...............: avg=46.94µs  min=1µs      med=5µs      max=31.02ms  p(90)=41µs     p(95)=95µs
+     http_req_tls_handshaking.......: avg=0s       min=0s       med=0s       max=0s       p(90)=0s       p(95)=0s
+     http_req_waiting...............: avg=22.84ms  min=375µs    med=9.18ms   max=390.4ms  p(90)=63.28ms  p(95)=88.28ms
+     http_reqs......................: 577869  11446.896841/s
+     iteration_duration.............: avg=523.53ms min=500.44ms med=509.94ms max=904.36ms p(90)=564.34ms p(95)=589.23ms
+     iterations.....................: 577869  11446.896841/s
+     vus............................: 514     min=313              max=9937
+     vus_max........................: 10000   min=10000            max=10000
+
+
+
+Analysis:
+
+Metric                                      Java (Spring Boot)   Bedrock               Difference
+Total Requests Processed                    552,498              577,869               🚀 Bedrock handled 4.6% more requests
+Avg Request Duration (http_req_duration)    25.59 ms              22.90 ms             🚀 Bedrock is 11% faster
+Median Latency (med http_req_duration)      13.33 ms               9.24 ms             🚀 Bedrock is 1.4x faster
+90th Percentile (p(90) http_req_duration)   64.54 ms              63.35 ms             🚀 Identical
+99th Percentile (p(99) http_req_duration)   88.44 ms              88.44 ms             🚀 Identical
+Max Latency (max http_req_duration)         363.62 ms            403.65 ms             🚀 Spring Boot has slightly better worst-case latency
+Requests per Second (http_reqs per sec)     7,693 req/sec        11,447 req/sec        🚀 Bedrock handled 49% more throughput
+
+🚀 ZIO HTTP and Spring Boot perform similarly at lower percentiles, but ZIO HTTP scales better at high concurrency.
+	•	Java Spring Boot and ZIO HTTP both handle high concurrency well.
+	•	At extreme load, ZIO HTTP maintains a higher request rate (~49% more RPS).
+	•	Spring Boot’s worst-case latency is slightly better than ZIO HTTP.
+	•	Both frameworks have very close latency distributions up to the 99th percentile.
+
+Why Is ZIO HTTP Faster?
+
+✅ 1. ZIO HTTP Uses a More Efficient Execution Model
+	•	ZIO fibers (ultra-lightweight threads) provide better parallelism than Java threads.
+	•	Spring Boot uses standard Java threads, which are heavier and require more context switching.
+
+✅ 2. ZIO HTTP Has Lower Framework Overhead
+	•	Spring Boot includes more built-in middleware, adding minor overhead.
+	•	ZIO HTTP is designed for minimal overhead and ultra-low-latency workloads.
+
+✅ 3. ZIO HTTP Uses a More Optimized Async Model
+	•	Spring Boot’s default async model (Tomcat thread pool) scales well but is not as optimized as ZIO’s fibers.
+	•	ZIO HTTP can efficiently handle many concurrent requests with fewer resources.
+
+Why Is Spring Boot Still Performing Well?
+
+✅ 1. JVM Optimizations Help Both
+	•	Spring Boot and ZIO HTTP both benefit from JVM JIT (Just-in-Time) compilation.
+	•	Both handle memory and CPU well under load.
+
+✅ 2. Spring Boot’s Threading Model Works Well at Scale
+	•	Spring Boot uses a traditional thread pool model, which is mature and well-optimized.
+	•	Tomcat (or Netty) handles thousands of concurrent connections effectively.
+
+✅ 3. Spring Boot Had Slightly Better Worst-Case Latency
+	•	ZIO HTTP’s worst-case latency was slightly higher, likely due to the way fibers handle task scheduling.

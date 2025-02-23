@@ -22,8 +22,7 @@ Starting point for REST service
 
 
 IN-PROGRESS:
-* Figure out OAuth
-   -- Get Mobile/SPA/machine-2-machine working (different flow? AJAX?)
+
 
 DEPLOYMENT/AWS:
 * Configure logback to send logs to CloudWatch. May need templated config files to do this.
@@ -40,11 +39,8 @@ TODO:
         * Kill subscriptions for unknown servers, kill servers that aren't subscribed (retest)
         * For ea server get its key bundle version. Should be the same
         * Kill/restart any servers with older key bundle version (they missed a message)
-* Figure out Terraform
-   -- Using TF to replace all the AWS CLI commands I use with LocalStack (there won't be LocalStack obviously in AWS)
-   -- Configure multiple environments with different TF specs: dev, test, stage, prod
-   -- Configure github workflows manually trigger deployments to different envs
-   -- Figure out AWS permissioning so a low-level dev can't deploy to prod but a sr-dev could
+* Configure github workflows manually trigger deployments to different envs
+* Figure out AWS permissioning so a low-level dev can't deploy to prod but a sr-dev could
 * Figure out monitoring
 * Figure out advanced logging (eg with queries like splunk)
 * Investigate queryable event queue

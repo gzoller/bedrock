@@ -1,0 +1,12 @@
+{
+  "name": "node-fastify-app",
+  "version": "1.0.0",
+  "description": "A high-performance REST API using Fastify",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "fastify": "^4.17.0"
+  }
+}

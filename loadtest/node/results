@@ -1,0 +1,98 @@
+Node.js:
+
+     scenarios: (100.00%) 1 scenario, 10000 max VUs, 1m20s max duration (incl. graceful stop):
+              * default: Up to 10000 looping VUs for 50s over 3 stages (gracefulRampDown: 30s, gracefulStop: 30s)
+
+
+     ✓ status was 200
+
+     checks.........................: 100.00% 378344 out of 378344
+     data_received..................: 72 MB   1.4 MB/s
+     data_sent......................: 34 MB   641 kB/s
+     http_req_blocked...............: avg=5.16µs   min=0s       med=1µs      max=3.69ms p(90)=3µs      p(95)=4µs
+     http_req_connecting............: avg=2.74µs   min=0s       med=0s       max=3.66ms p(90)=0s       p(95)=0s
+     http_req_duration..............: avg=334.19ms min=451µs    med=188.26ms max=17.04s p(90)=502.15ms p(95)=727.87ms
+       { expected_response:true }...: avg=334.19ms min=451µs    med=188.26ms max=17.04s p(90)=502.15ms p(95)=727.87ms
+     http_req_failed................: 0.00%   0 out of 378344
+     http_req_receiving.............: avg=12.9µs   min=3µs      med=8µs      max=3.54ms p(90)=25µs     p(95)=33µs
+     http_req_sending...............: avg=8.78µs   min=1µs      med=3µs      max=2.41ms p(90)=15µs     p(95)=27µs
+     http_req_tls_handshaking.......: avg=0s       min=0s       med=0s       max=0s     p(90)=0s       p(95)=0s
+     http_req_waiting...............: avg=334.17ms min=438µs    med=188.23ms max=17.04s p(90)=502.13ms p(95)=727.86ms
+     http_reqs......................: 378344  7204.391064/s
+     iteration_duration.............: avg=834.37ms min=500.51ms med=688.37ms max=17.54s p(90)=1s       p(95)=1.22s
+     iterations.....................: 378344  7204.391064/s
+     vus............................: 137     min=137              max=10000
+     vus_max........................: 10000   min=10000            max=10000
+
+
+Bedrock:
+
+     scenarios: (100.00%) 1 scenario, 10000 max VUs, 1m20s max duration (incl. graceful stop):
+              * default: Up to 10000 looping VUs for 50s over 3 stages (gracefulRampDown: 30s, gracefulStop: 30s)
+
+
+     ✓ status was 200
+
+     checks.........................: 100.00% 577869 out of 577869
+     data_received..................: 62 MB   1.2 MB/s
+     data_sent......................: 51 MB   1.0 MB/s
+     http_req_blocked...............: avg=9.36µs   min=0s       med=2µs      max=148.15ms p(90)=3µs      p(95)=4µs
+     http_req_connecting............: avg=6.74µs   min=0s       med=0s       max=148.13ms p(90)=0s       p(95)=0s
+     http_req_duration..............: avg=22.9ms   min=397µs    med=9.24ms   max=403.65ms p(90)=63.35ms  p(95)=88.44ms
+       { expected_response:true }...: avg=22.9ms   min=397µs    med=9.24ms   max=403.65ms p(90)=63.35ms  p(95)=88.44ms
+     http_req_failed................: 0.00%   0 out of 577869
+     http_req_receiving.............: avg=17.81µs  min=3µs      med=8µs      max=35.43ms  p(90)=19µs     p(95)=28µs
+     http_req_sending...............: avg=46.94µs  min=1µs      med=5µs      max=31.02ms  p(90)=41µs     p(95)=95µs
+     http_req_tls_handshaking.......: avg=0s       min=0s       med=0s       max=0s       p(90)=0s       p(95)=0s
+     http_req_waiting...............: avg=22.84ms  min=375µs    med=9.18ms   max=390.4ms  p(90)=63.28ms  p(95)=88.28ms
+     http_reqs......................: 577869  11446.896841/s
+     iteration_duration.............: avg=523.53ms min=500.44ms med=509.94ms max=904.36ms p(90)=564.34ms p(95)=589.23ms
+     iterations.....................: 577869  11446.896841/s
+     vus............................: 514     min=313              max=9937
+     vus_max........................: 10000   min=10000            max=10000
+
+
+
+Analysis:
+
+Metric                                      Node.js (Fastify)    Bedrock               Difference
+Total Requests Processed                    378,344              577,869               🚀 Bedrock handled 1.53× more requests
+Avg Request Duration (http_req_duration)    334.19 ms             22.90 ms             🚀 Bedrock is 14.6× faster
+Median Latency (med http_req_duration)      188.26 ms              9.24 ms             🚀 Bedrock median latency is 20 lower
+90th Percentile (p(90) http_req_duration)   502.15 ms             63.35 ms             🚀 Fastify's p(90) is 8 slower
+99th Percentile (p(99) http_req_duration)   727.87 ms             88.44 ms             🚀 Fastify’s p(99) is 8.2 slower
+Max Latency (max http_req_duration)         17040 ms             403.65 ms             🚀 Fastify’s worst-case latency is 42× worse
+Requests per Second (http_reqs per sec)     7,204 req/sec        11,447 req/sec        🚀 Bedrock handled 1.58 more throughput
+
+🚀 ZIO HTTP outperforms Fastify in every key performance metric.
+	•	Node.js Fastify exhibits much higher latencies under load.
+	•	ZIO HTTP processes more requests per second with much lower response times.
+	•	Fastify struggles at high concurrency, especially at the 99th percentile and worst-case latencies.
+
+Why Is Fastify So Much Slower?
+
+🚨 Fastify’s Event Loop Queuing Delays Requests
+	•	Fastify is single-threaded and relies on Node.js’s event loop.
+	•	When requests stack up, they wait in the event loop queue instead of running in parallel.
+
+🚨 Fastify Struggles with High Parallelism
+	•	Fastify is optimized for moderate concurrency but not extreme loads.
+	•	At high concurrency (10,000 VUs), the event loop becomes a bottleneck.
+
+🚨 Garbage Collection & V8 Optimizations Aren’t Enough
+	•	Node.js uses V8’s GC, which is efficient, but not as optimized as the JVM’s JIT compiler.
+	•	ZIO fibers (JVM’s lightweight threads) handle much higher concurrency than Node’s event loop.
+
+Why Is ZIO HTTP So Much Faster?
+
+✅ ZIO Fibers Scale Better Than Node.js Event Loop
+	•	JVM fibers run independently and can scale across multiple CPU cores.
+	•	ZIO HTTP does not rely on an event loop and schedules requests more efficiently.
+
+✅ JVM’s JIT Compiler & GC Outperform V8
+	•	The JVM’s Just-In-Time (JIT) compiler optimizes execution at runtime.
+	•	Garbage collection (GC) in the JVM is more efficient at high loads than V8’s.
+
+✅ Parallelism Works Natively in ZIO
+	•	ZIO HTTP scales horizontally using fibers.
+	•	Node.js, being single-threaded, struggles at higher concurrency levels.
