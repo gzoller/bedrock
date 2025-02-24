@@ -19,6 +19,8 @@ Starting point for REST service
   - Role-based endpoint protection
 * KMS encryption of secrets (required for HIPAA)
 
+[Relative Performance Survey](docs/performance.md)
+
 
 
 IN-PROGRESS:
